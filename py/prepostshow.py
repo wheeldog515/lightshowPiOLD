@@ -49,8 +49,7 @@ class PrePostShow(object):
             self.hc = __import__('hardware_controller')
             self.hc.initialize()
 
-        self.cm = self.hc.cm
-        self.config = self.cm.lightshow()[show]
+        self.config = self.hc.lightshow_config[show]
         self.show = show
         self.audio = None
 
@@ -61,8 +60,8 @@ class PrePostShow(object):
         Check the state file to see if play now requested
         """
         # refresh state
-        self.cm.load_state()
-        if int(self.cm.get_state('play_now', 0)):
+        #self.hc.load_state()
+        if int(self.hc.get_state('play_now', 0)):
             # play now requested!
             return True
         return False
@@ -92,16 +91,18 @@ class PrePostShow(object):
 
         # start the audio if there is any
         self.start_audio()
-
+        if "use_overrides" in self.config:
+            use_overrides = True if self.config['use_overrides'] == "True" else False
+            
         if 'transitions' in self.config:
             try:
                 # display transition based show
                 for transition in self.config['transitions']:
                     start = time.time()
                     if transition['type'].lower() == 'on':
-                        self.hc.turn_on_lights(True)
+                        self.hc.turn_on_lights(use_overrides)
                     else:
-                        self.hc.turn_off_lights(True)
+                        self.hc.turn_off_lights(use_overrides)
                     logging.debug('Transition to ' + transition['type'] + ' for '
                                   + str(transition['duration']) + ' seconds')
 
@@ -112,9 +113,9 @@ class PrePostShow(object):
                             channels = channel_control[key]
                             for channel in channels:
                                 if mode == 'on':
-                                    self.hc.turn_on_light(int(channel) - 1, 1)
+                                    self.hc.turn_on_light(int(channel) - 1, use_overrides)
                                 elif mode == 'off':
-                                    self.hc.turn_off_light(int(channel) - 1, 1)
+                                    self.hc.turn_off_light(int(channel) - 1, use_overrides)
                                 else:
                                     logging.error("Unrecognized channel_control mode "
                                                   "defined in preshow_configuration "

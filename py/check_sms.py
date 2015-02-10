@@ -34,21 +34,15 @@ https://code.google.com/r/bwpayne-pygooglevoice-auth-fix/
 """
 
 import argparse
-import commands
 import logging
 import sys
 import time
 
 from bs4 import BeautifulSoup
-import configuration_manager as cm
 from googlevoice import Voice
 
-# SMS Configurations
-_CONFIG = cm.sms()
-
-# First check to make sure SMS is enabled
-if not _CONFIG['enable']:
-    sys.exit()
+import sms_configuration_manager
+import commands
 
 # Setup your username and password in ~/.gvoice (or /root/.gvoice when running as root)
 # file as follows to avoid being asked for your email and password each time:
@@ -60,19 +54,6 @@ if not _CONFIG['enable']:
 
 VOICE = Voice()
 VOICE.login()
-
-playlist_path = cm.lightshow()['playlist_path']
-unknown_command_response = _CONFIG['unknown_command_response']
-
-
-def song_played(song):
-    """
-    Send an sms message to each requesting user that their song is now playing
-
-    :param song: list, song information for song that is playing
-    """
-    for phone_number in song[2]:
-        VOICE.send_sms(phone_number, '"' + song[0] + '" is playing!')
 
 
 def extract_sms(html_sms):
@@ -123,26 +104,23 @@ def main():
             playlist = cm.songs(args.playlist)
             songs = []
             for song in playlist:
-                logging.debug(song)
-                if len(song) < 2 or len(song) > 4:
-                    logging.warn('Invalid playlist entry.  Each line should be in the form: ' 
-                                 '<song name><tab><path to song>')
-                    continue
-                elif len(song) == 2:
+                #logging.debug(song)
+                if len(song) == 2:
                     song.append(set())
                 elif len(song) >= 3:
                     # Votes for the song are stored in the 3rd column
                     song[2] = set(song[2].split(','))
 
+                    # Notification of a song being played is stored in the 4th column
                     if len(song) == 4:
-                        # Notification of a song being played is stored in the 4th column
-                        song_played(song)
+                        # Send an sms message to each requesting user that their song is now playing
+                        for phone_number in song[2]:
+                            VOICE.send_sms(phone_number, '"' + song[0] + '" is playing!')
                         del song[3]
                         song[2] = set()
-
                 songs.append(song)
             logging.info('loaded %d songs from playlist', len(songs))
-            cm.set_songs(songs)
+            #cm.set_songs(songs)
 
             # Parse and act on any new sms messages
             messages = VOICE.sms().messages
@@ -186,30 +164,48 @@ def main():
             pass
 
 if __name__ == "__main__":
+    # Log everything to debug log file
+    logging.basicConfig(filename=sms_configuration_manager.LOG_DIR + '/music_and_lights.check.dbg',
+                        format='[%(asctime)s] %(levelname)s {%(pathname)s:%(lineno)d}'
+                        ' - %(message)s',
+                        level='INFO')
+    
     # parse command line arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('--playlist',
-                        default=playlist_path,
-                        help='filename with the song playlist, one song per line in the format: '
-                             '<song name><tab><path to song>')
-    parser.add_argument('--log', default='DEBUG',
+    parser.add_argument('--log', default='INFO',
                         help='Set the logging level. levels:INFO, DEBUG, WARNING, ERROR, CRITICAL')
     
-    args = parser.parse_args()
-    
+    parser.add_argument('--playlist',
+                        default='playlist_path',
+                        help='filename with the song playlist, one song per line in the format: '
+                             '<song name><tab><path to song>')
+
     # Log to our log file at the specified level
     levels = {'DEBUG': logging.DEBUG,
               'INFO': logging.INFO,
               'WARNING': logging.WARNING,
               'ERROR': logging.ERROR,
               'CRITICAL': logging.CRITICAL}
-    level = levels.get(args.log.upper())
+    level = levels.get(parser.parse_args().log.upper())
+    logging.getLogger().setLevel(level)
     
-    # Log everything to debug log file
-    logging.basicConfig(filename=cm.LOG_DIR + '/music_and_lights.check.dbg',
-                        format='[%(asctime)s] %(levelname)s {%(pathname)s:%(lineno)d}'
-                        ' - %(message)s',
-                        level=level)
+    cm = sms_configuration_manager.Configuration()
+    playlist_path = cm.playlist_path
+    if parser.parse_args().playlist == 'playlist_path':
+            parser.set_defaults(playlist=cm.playlist_path)
 
+    args = parser.parse_args()
+    
+    # SMS Configurations
+    _CONFIG = cm._SMS_CONFIG
+
+    # First check to make sure SMS is enabled
+    if not _CONFIG['enable']:
+        sys.exit()
+
+    unknown_command_response = _CONFIG['unknown_command_response']
+    # setup sms commands
+    commands.setup(cm)
+    
     # Start checking for sms messages
     main()

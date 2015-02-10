@@ -32,12 +32,6 @@ import re
 import subprocess
 import sys
 
-import configuration_manager as cm
-
-
-_CONFIG = cm.sms()
-_CMD_NAMES = _CONFIG['commands']
-
 
 # The base command class. The class keeps track of all commands instantiated, so to install a new
 # command, simply instantiate a new instance of it.
@@ -134,13 +128,10 @@ def cmd_help(*args):
     help_msg = "Commands:\n"
     for cmd in _CMD_NAMES:
         if cm.has_permission(user, cmd):
-            cmd_description = cm.sms()[cmd + '_description']
+            cmd_description = cm._SMS_CONFIG[cmd + '_description']
             if cmd_description:
                 help_msg += cmd_description + "\n"
     return help_msg
-
-
-Command('help', cmd_help)
 
 
 # TODO(todd): Add paging support for large playlist (Issue #22)
@@ -164,9 +155,6 @@ def cmd_list(*args):
     return songlist
 
 
-Command('list', cmd_list)
-
-
 def cmd_play(*args):
     """
     Interrupts whatever is going on, and plays the requested song.
@@ -185,9 +173,6 @@ def cmd_play(*args):
         else:
             cm.update_state('play_now', song)
             return '"' + cm.songs()[song - 1][0] + '" coming right up!'
-
-
-Command('play', cmd_play)
 
 
 def cmd_volume(*args):
@@ -209,7 +194,7 @@ def cmd_volume(*args):
             return 'volume must be between 0 and 100'
         sanitized_cmd = str(vol)
     else:
-        return cm.sms()['volume_description']
+        return cm._SMS_CONFIG['volume_description']
 
     # Execute the sanitized command and handle result
     volscript = cm.HOME_DIR + '/bin/vol'
@@ -221,9 +206,6 @@ def cmd_volume(*args):
         return 'volume request failed'
     else:
         return 'volume = ' + str(output)
-
-
-Command('volume', cmd_volume)
 
 
 # Casts a vote for the next song to be played.
@@ -245,7 +227,16 @@ def cmd_vote(*args):
             return 'Thank you for requesting "' + song[0] \
                    + '", we\'ll notify you when it starts!'
     else:
-        return cm.sms()['unknown_command_response']
+        return cm._SMS_CONFIG['unknown_command_response']
 
-
-Command('vote', cmd_vote)
+def setup(config):
+    global cm, _CONFIG, _CMD_NAMES
+    cm = config
+    _CONFIG = cm._SMS_CONFIG
+    _CMD_NAMES = _CONFIG['commands']
+    
+    Command('help', cmd_help)
+    Command('list', cmd_list)
+    Command('play', cmd_play)
+    Command('volume', cmd_volume)
+    Command('vote', cmd_vote)

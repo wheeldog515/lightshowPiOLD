@@ -2,7 +2,7 @@
 
 import time
 
-lights = hc._GPIO_PINS
+lights = hc.gpio_pins
 
 # exit_event is passed in from the pre/post show script as is required
 # if an exit_event is generated the pre/post show script can terminate the script 
@@ -15,7 +15,7 @@ def main(exit_event):
     # USE ONE OF THE BELOW LOOPS AS A STARTING POINT
     # JUST UNCOMMENT ONE AND DELETE THE OTHERS
 
-    #for count in range(10):
+    for count in range(10):
 
     #count = 0
     #while count < 10:

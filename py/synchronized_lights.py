@@ -15,7 +15,7 @@ When executed, this script will play an audio file, as well as turn on
 and off N channels of lights to the music (by default the first 8 GPIO
 channels on the Raspberry Pi), based upon music it is playing. Many
 types of audio files are supported (see decoder.py below), but it has
-only been tested with wav and mp3 at the time of this writing.
+only been tested with wav, mp3, and flac at the time of this writing.
 
 The timing of the lights turning on and off is based upon the frequency
 response of the music being played.  A short segment of the music is
@@ -61,701 +61,772 @@ numpy: for FFT calculation
 """
 import argparse
 import atexit
+import cPickle
 import logging
 import os
+import psutil
 import random
+import socket
 import subprocess
 import sys
 import wave
 
-import alsaaudio as aa
+import alsaaudio
 import decoder
 import fft
-import hardware_controller as hc
-import numpy as np
+import hardware_manager
+import numpy
 
 from prepostshow import PrePostShow
 
-# Configurations
-cm = hc.cm
-lightshow_config = cm.lightshow()
-audio_config = cm.audio_processing()
+class Lightshow(hardware_manager.Hardware):
+    
+    def __init__(self):
+        super(Lightshow, self).__init__()
 
-_MODE = lightshow_config['mode']
-_PLAYLIST_PATH = lightshow_config['playlist_path']
-_RANDOMIZE_PLAYLIST = lightshow_config['randomize_playlist']
+        self.mode = self.lightshow_config['mode']
+        self.playlist_path = self.lightshow_config['playlist_path']
+        self.randomize_playlist = self.lightshow_config['randomize_playlist']
 
-USEFM = audio_config['fm']
-if USEFM:
-    FM_FREQUENCY = audio_config['frequency']
-    play_stereo = True
-    music_pipe_r, music_pipe_w = os.pipe()
+        self.chunk_size = self.audio_config['chunk_size']
 
-GPIOLEN = hc.GPIOLEN
-CHUNK_SIZE = audio_config['chunk_size']
+        self.networking = self.network_config['networking']
+        self.port = self.network_config['port']
+        
+        self.not_pwm = [not pin if pin else not pin for pin in self.is_pin_pwm]
+        
+        self.usefm = self.audio_config['fm']
 
+        self.song_filename = None
+        self.audio_device = None
+        self.fm_process = None
+        self.stream = None
+        self.stop_the_show = False
+        self.__initialized = False
+        
+        self.output_device()
 
-@atexit.register
-def on_exit():
-    # We're done, turn it all off and clean up things ;)
-    hc.clean_up()
+    def output_device(self):
+        if self.usefm:
+            self.fm_frequency = self.audio_config['frequency']
+            self.music_pipe_r, self.music_pipe_w = os.pipe()
+            logging.info("Sending output as fm transmission")
 
-
-def calculate_channel_frequency():
-    """
-    Calculate frequency values
-
-    Calculate frequency values for each channel,
-    taking into account custom settings.
-    """
-    min_frequency = audio_config['min_frequency']
-    max_frequency = audio_config['max_frequency']
-    custom_channel_mapping = audio_config['custom_channel_mapping']
-    custom_channel_frequencies = audio_config['custom_channel_frequencies']
-
-    # How many channels do we need to calculate the frequency for
-    if custom_channel_mapping != 0 and len(custom_channel_mapping) == GPIOLEN:
-        logging.debug("Custom Channel Mapping is being used: %s", str(custom_channel_mapping))
-        channel_length = max(custom_channel_mapping)
-    else:
-        logging.debug("Normal Channel Mapping is being used.")
-        channel_length = GPIOLEN
-
-    logging.debug("Calculating frequencies for %d channels.", channel_length)
-    octaves = (np.log(max_frequency / min_frequency)) / np.log(2)
-    logging.debug("octaves in selected frequency range ... %s", octaves)
-    octaves_per_channel = octaves / channel_length
-    frequency_limits = []
-    frequency_store = []
-
-    frequency_limits.append(min_frequency)
-
-    if custom_channel_frequencies != 0 and (len(custom_channel_frequencies) >= channel_length + 1):
-        logging.debug("Custom channel frequencies are being used")
-        frequency_limits = custom_channel_frequencies
-    else:
-        logging.debug("Custom channel frequencies are not being used")
-        for pin in range(1, GPIOLEN + 1):
-            frequency_limits.append(frequency_limits[-1]
-                                    * 10 ** (3 / (10 * (1 / octaves_per_channel))))
-    for pin in range(0, channel_length):
-        frequency_store.append((frequency_limits[pin], frequency_limits[pin + 1]))
-        logging.debug("channel %d is %6.2f to %6.2f ", pin, frequency_limits[pin],
-                      frequency_limits[pin + 1])
-
-    # we have the frequencies now lets map them if custom mapping is defined
-    if custom_channel_mapping != 0 and len(custom_channel_mapping) == GPIOLEN:
-        frequency_map = []
-        for pin in range(0, GPIOLEN):
-            mapped_channel = custom_channel_mapping[pin] - 1
-            mapped_frequency_set = frequency_store[mapped_channel]
-            mapped_frequency_set_low = mapped_frequency_set[0]
-            mapped_frequency_set_high = mapped_frequency_set[1]
-            logging.debug("mapped channel: " + str(mapped_channel) + " will hold LOW: "
-                          + str(mapped_frequency_set_low) + " HIGH: "
-                          + str(mapped_frequency_set_high))
-            frequency_map.append(mapped_frequency_set)
-        return frequency_map
-    else:
-        return frequency_store
-
-
-def update_lights(matrix, mean, std):
-    """
-    Update the state of all the lights
-
-    Update the state of all the lights based upon the current
-    frequency response matrix
-    :param std: numpy.std()
-    :param mean: numpy.mean()
-    :param matrix: list of floats
-    """
-    for pin in range(0, GPIOLEN):
-        # Calculate output pwm, where off is at some portion of the std below
-        # the mean and full on is at some portion of the std above the mean.
-        brightness = matrix[pin] - mean[pin] + 0.5 * std[pin]
-        brightness /= 1.25 * std[pin]
-        if brightness > 1.0:
-            brightness = 1.0
-        if brightness < 0:
-            brightness = 0
-        if not hc.is_pin_pwm[pin]:
-            # If pin is on / off mode we'll turn on at 1/2 brightness
-            if brightness > 0.5:
-                hc.turn_on_light(pin, True)
-            else:
-                hc.turn_off_light(pin, True)
+            with open(os.devnull, "w") as dev_null:
+                # start pifm as a separate process 
+                # play_stereo is always True as coded, Should it be changed to
+                # an option in the config file?
+                self.fm_process = subprocess.Popen(["sudo",
+                                                    self.HOME_DIR + "/bin/pifm",
+                                                    "-",
+                                                    str(self.fm_frequency),
+                                                    "44100",
+                                                    "stereo"],
+                                                   stdin=self.music_pipe_r,
+                                                   stdout=dev_null)
+        elif self.mode == 'audio-in':
+            # Open the input stream from default input device
+            self.audio_device = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, self.lightshow_config['audio_in_card'])
+            self.audio_device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
         else:
-            hc.turn_on_light(pin, True, brightness)
+            self.audio_device = alsaaudio.PCM(alsaaudio.PCM_PLAYBACK, alsaaudio.PCM_NORMAL)
+            self.audio_device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+         
+    def update_lights(self, matrix, mean, std):
+        """
+        Update the state of all the lights
 
+        Update the state of all the lights based upon the current
+        frequency response matrix
+        :param std: numpy.std()
+        :param mean: numpy.mean()
+        :param matrix: list of floats
+        """
+        if self.networking == "server":
+            self.broadcast(matrix, mean, std)
 
-def audio_in():
-    """Control the lightshow from audio coming in from a USB audio card"""
-    sample_rate = lightshow_config['audio_in_sample_rate']
-    input_channels = lightshow_config['audio_in_channels']
+        for pin in range(self.gpiolen):
+            # Calculate output pwm, where off is at some portion of the std below
+            # the mean and full on is at some portion of the std above the mean.
+            brightness = (matrix[pin] - mean[pin] + 0.5 * std[pin]) / 1.25 * std[pin]
+            brightness = max(0.0, min(1.0, brightness))
+            if self.not_pwm[pin]:
+                # If pin is on / off mode we'll turn on at 1/2 brightness
+                self.turn_on_light(pin, True, float(brightness > 0.5))
+            else:
+                self.turn_on_light(pin, True, brightness)
 
-    # Open the input stream from default input device
-    stream = aa.PCM(aa.PCM_CAPTURE, aa.PCM_NORMAL, lightshow_config['audio_in_card'])
-    stream.setchannels(input_channels)
-    stream.setformat(aa.PCM_FORMAT_S16_LE)  # Expose in config if needed
-    stream.setrate(sample_rate)
-    stream.setperiodsize(CHUNK_SIZE)
+    def calculate_channel_frequency(self):
+        """
+        Calculate frequency values
 
-    logging.debug("Running in audio-in mode - will run until Ctrl+C is pressed")
-    print "Running in audio-in mode, use Ctrl+C to stop"
-    try:
-        hc.initialize()
+        Calculate frequency values for each channel,
+        taking into account custom settings.
+        """
+        min_frequency = self.audio_config['min_frequency']
+        max_frequency = self.audio_config['max_frequency']
+        custom_channel_mapping = self.audio_config['custom_channel_mapping']
+        custom_channel_frequencies = self.audio_config['custom_channel_frequencies']
+
+        # How many channels do we need to calculate the frequency for
+        if custom_channel_mapping != 0 and len(custom_channel_mapping) == self.gpiolen:
+            logging.debug("Custom Channel Mapping is being used: %s", str(custom_channel_mapping))
+            channel_length = max(custom_channel_mapping)
+        else:
+            logging.debug("Normal Channel Mapping is being used.")
+            channel_length = self.gpiolen
+
+        logging.debug("Calculating frequencies for %d channels.", channel_length)
+        octaves = (numpy.log(max_frequency / min_frequency)) / numpy.log(2)
+        logging.debug("octaves in selected frequency range ... %s", octaves)
+        octaves_per_channel = octaves / channel_length
+        frequency_limits = []
+        frequency_store = []
+
+        frequency_limits.append(min_frequency)
+
+        if custom_channel_frequencies != 0 and (len(custom_channel_frequencies) >= channel_length + 1):
+            logging.debug("Custom channel frequencies are being used")
+            frequency_limits = custom_channel_frequencies
+        else:
+            logging.debug("Custom channel frequencies are not being used")
+            for pin in range(1, self.gpiolen + 1):
+                #frequency_limits.append(
+                    #frequency_limits[-1] * 2 ** octaves_per_channel)
+                frequency_limits.append(frequency_limits[-1]
+                                        * 10 ** (3 / (10 * (1 / octaves_per_channel))))
+        for pin in range(0, channel_length):
+            frequency_store.append((frequency_limits[pin], frequency_limits[pin + 1]))
+            logging.debug("channel %d is %6.2f to %6.2f ", pin, frequency_limits[pin],
+                        frequency_limits[pin + 1])
+
+        # we have the frequencies now lets map them if custom mapping is defined
+        if custom_channel_mapping != 0 and len(custom_channel_mapping) == self.gpiolen:
+            frequency_map = []
+            for pin in range(0, self.gpiolen):
+                mapped_channel = custom_channel_mapping[pin] - 1
+                mapped_frequency_set = frequency_store[mapped_channel]
+                mapped_frequency_set_low = mapped_frequency_set[0]
+                mapped_frequency_set_high = mapped_frequency_set[1]
+                logging.debug("mapped channel: " + str(mapped_channel) + " will hold LOW: "
+                            + str(mapped_frequency_set_low) + " HIGH: "
+                            + str(mapped_frequency_set_high))
+                frequency_map.append(mapped_frequency_set)
+            return frequency_map
+        else:
+            return frequency_store
+            
+    def audio_in(self):
+        """Control the lightshow from audio coming in from a USB audio card"""
+        sample_rate = self.lightshow_config['audio_in_sample_rate']
+        input_channels = self.lightshow_config['audio_in_channels']
+        
+        half_gpiolen = self.gpiolen / 2
+        
+        self.audio_device.setchannels(input_channels)
+        self.audio_device.setrate(sample_rate)
+        self.audio_device.setperiodsize(chunk_size)
+        
+        if not self.__initialized:
+            self.initialize()
+            self.__initialized = True
+
         frequency_limits = calculate_channel_frequency()
 
         # Start with these as our initial guesses - will calculate a rolling mean / std 
         # as we get input data.
-        mean = [12.0 for _ in range(GPIOLEN)]
-        std = [0.5 for _ in range(GPIOLEN)]
-        recent_samples = np.empty((250, GPIOLEN))
+        mean = [12.0 for _ in range(self.gpiolen)]
+        std = [0.5 for _ in range(self.gpiolen)]
+        recent_samples = numpy.empty((250, self.gpiolen))
         num_samples = 0
-
+        
+        logging.debug("Running in audio-in mode - will run until Ctrl+C is pressed")
+        print "Running in audio-in mode, use Ctrl+C to stop"
+        
         # Listen on the audio input device until CTRL-C is pressed
-        while True:
-            l, data = stream.read()
+        try:
+            while True:
+                length, data = self.audio_device.read()
 
-            if l:
-                try:
-                    matrix = fft.calculate_levels(data,
-                                                  CHUNK_SIZE,
-                                                  sample_rate,
-                                                  frequency_limits,
-                                                  GPIOLEN,
-                                                  input_channels)
-                    if not np.isfinite(np.sum(matrix)):
-                        # Bad data --- skip it
+                if length:
+                    try:
+                        matrix = fft.calculate_levels(data,
+                                                    chunk_size,
+                                                    sample_rate,
+                                                    frequency_limits,
+                                                    self.gpiolen,
+                                                    input_channels)
+                        if not numpy.isfinite(numpy.sum(matrix)):
+                            # Bad data --- skip it
+                            continue
+                    except ValueError as error:
+                        # TODO(todd): This is most likely occuring due to extra time in calculating
+                        # mean/std every 250 samples which causes more to be read than expected the
+                        # next time around.  Would be good to update mean/std in separate thread to
+                        # avoid this --- but for now, skip it when we run into this error is good 
+                        # enough ;)
+                        logging.debug("skipping update: " + str(error))
                         continue
-                except ValueError as error:
-                    # TODO(todd): This is most likely occuring due to extra time in calculating
-                    # mean/std every 250 samples which causes more to be read than expected the
-                    # next time around.  Would be good to update mean/std in separate thread to
-                    # avoid this --- but for now, skip it when we run into this error is good 
-                    # enough ;)
-                    logging.debug("skipping update: " + str(error))
-                    continue
 
-                update_lights(matrix, mean, std)
+                    self.update_lights(matrix, mean, std)
 
-                # Keep track of the last N samples to compute a running std / mean
-                #
-                # TODO(todd): Look into using this algorithm to compute this on a per sample basis:
-                # http://www.johndcook.com/blog/standard_deviation/                
-                if num_samples >= 250:
-                    no_connection_ct = 0
-                    for i in range(0, GPIOLEN):
-                        mean[i] = np.mean([item for item in recent_samples[:, i] if item > 0])
-                        std[i] = np.std([item for item in recent_samples[:, i] if item > 0])
+                    # Keep track of the last N samples to compute a running std / mean
+                    #
+                    # TODO(todd): Look into using this algorithm to compute this on a per sample basis:
+                    # http://www.johndcook.com/blog/standard_deviation/                
+                    if num_samples >= 250:
+                        for i in range(0, self.gpiolen):
+                            mean[i] = numpy.mean([item for item in recent_samples[:, i] if item > 0])
+                            std[i] = numpy.std([item for item in recent_samples[:, i] if item > 0])
 
                         # Count how many channels are below 10, 
                         # if more than 1/2, assume noise (no connection)
-                        if mean[i] < 10.0:
-                            no_connection_ct += 1
-
-                    # If more than 1/2 of the channels appear to be not connected, turn all off
-                    if no_connection_ct > GPIOLEN / 2:
-                        logging.debug("no input detected, turning all lights off")
-                        mean = [20 for _ in range(GPIOLEN)]
+                        # If more than 1/2 of the channels appear to be not connected, turn all off
+                        if sum(not_connected < 10.0 for not_connected in mean) > half_gpiolen:
+                            logging.debug("no input detected, turning all lights off")
+                            mean = [20 for _ in range(self.gpiolen)]
+                        else:
+                            logging.debug("std: " + str(std) + ", mean: " + str(mean))
+                        num_samples = 0
                     else:
-                        logging.debug("std: " + str(std) + ", mean: " + str(mean))
-                    num_samples = 0
-                else:
-                    for i in range(0, GPIOLEN):
-                        recent_samples[num_samples][i] = matrix[i]
-                    num_samples += 1
+                        for i in range(0, self.gpiolen):
+                            recent_samples[num_samples][i] = matrix[i]
+                        num_samples += 1
 
-    except KeyboardInterrupt:
-        pass
-    finally:
-        print "\nStopping"
-        hc.clean_up()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            print "\nStopping"
+            self.clean_up()
 
+    # If in client mode, ignore everything else (FFT calcs etc) and just
+    # read data from the network and blink the lights
+    def network_client(self):
+        logging.info("Network client mode starting")
+        print "Network client mode starting..."
+        try:
+            channels = self.network_config['channels']
+            self.stream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.stream.bind(('', self.port))
+            
+            print "listening on port: " + str(self.port)
+            
+            logging.info("client channels mapped as\n" + str(channels))
+            logging.info("listening on port: " + str(self.port))
+        except socket.error, msg:
+            logging.error('Failed create socket or bind. Error code: ' + 
+                          str(msg[0]) + ' : ' + msg[1])
+            self.stream.close()
+            sys.exit(0)
+            
+        print "press CTRL<C> to end"
+        self.initialize()
 
-def next_song():
-    """
-    Get the next song to play from the playlist
-    :rtype : String, containing the song filename
-    """
-    song_to_play = int(cm.get_state('song_to_play', 0))
-    play_now = int(cm.get_state('play_now', 0))
-    song_filename = args.file
-
-    if args.playlist is not None and args.file is None:
-        most_votes = [None, None, []]
-
-        # read playlist from file
-        playlist = cm.songs(args.playlist)
-        songs = []
-        for song in playlist:
-            if len(song) < 2 or len(song) > 4:
-                logging.warn('Invalid playlist enrty.  Each line should be in the form: '
-                             '<song name><tab><path to song>')
-                continue
-            elif len(song) == 2:
-                song.append(set())
-            else:
-                song[2] = set(song[2].split(','))
-                if len(song) == 3 and len(song[2]) >= len(most_votes[2]):
-                    most_votes = song
-            songs.append(song)
-
-        if most_votes[0] is not None:
-            logging.info("Most Votes: " + str(most_votes))
-            current_song = most_votes
-
-            for song in songs:
-                if current_song == song and len(song) == 3:
-                    song.append("playing!")
-                if len(song[2]) > 0:
-                    song[2] = ",".join(song[2])
-                else:
-                    del song[2]
-            cm.update_songs(args.playlist, songs)
-        else:
-            # Get a "play now" requested song
-            if 0 < play_now <= len(songs):
-                current_song = songs[play_now - 1]
-
-            # Get random song
-            elif _RANDOMIZE_PLAYLIST:
-                # Use python's random.randrange() to get a random song
-                current_song = songs[random.randrange(len(songs))]
-
-            # Play next song in the lineup
-            else:
-                if song_to_play <= len(songs) - 1:
-                    song_to_play = song_to_play
-                else:
-                    song_to_play = 0
-
-                current_song = songs[song_to_play]
-
-                if (song_to_play + 1) <= len(songs) - 1:
-                    next_song_to_play = (song_to_play + 1)
-                else:
-                    next_song_to_play = 0
-
-                cm.update_state('song_to_play', next_song_to_play)
-
-        # Get filename to play and store the current song playing in state cfg
-        song_filename = current_song[1]
-        cm.update_state('current_song', songs.index(current_song))
-
-    return song_filename.replace("$SYNCHRONIZED_LIGHTS_HOME", cm.HOME_DIR)
-
-
-def set_up_audio_output(song_filename):
-    """
-    Set up the audio output device(s)
-
-    :rtype : tuple, tuple of output device(s) and decoder object
-    :param song_filename: string, path and name of song file
-    """
-    if song_filename.endswith('.wav'):
-        music_file = wave.open(song_filename, 'r')
-    else:
-        music_file = decoder.open(song_filename)
-
-    sample_rate = music_file.getframerate()
-    num_channels = music_file.getnchannels()
-
-    fm_process = None
-    output = None
-
-    if USEFM:
-        logging.info("Sending output as fm transmission")
-
-        with open(os.devnull, "w") as dev_null:
-            # play_stereo is always True as coded, Should it be changed to
-            # an option in the config file?
-            fm_process = subprocess.Popen(["sudo",
-                                           cm.HOME_DIR + "/bin/pifm",
-                                           "-",
-                                           str(FM_FREQUENCY),
-                                           "44100",
-                                           "stereo" if play_stereo else "mono"],
-                                          stdin=music_pipe_r,
-                                          stdout=dev_null)
-    else:
-        output = aa.PCM(aa.PCM_PLAYBACK, aa.PCM_NORMAL)
-        output.setchannels(num_channels)
-        output.setrate(sample_rate)
-        output.setformat(aa.PCM_FORMAT_S16_LE)
-        output.setperiodsize(CHUNK_SIZE)
-
-    return (fm_process, output), music_file
-
-
-def save_matrix(cache_filename, cache_matrix, sample_rate, num_channels):
-    """
-    Save the data necessary for playback so that it will not need to
-    be calculated again
-
-    :param cache_filename: string, path and name of sync file
-    :param cache_matrix: numpy.array(), fft data for the music file
-    :param sample_rate: int, music sample_rate
-    :param num_channels: int, number of channels in music file
-    """
-    show_configuration = np.array([[GPIOLEN],
-                                   [sample_rate],
-                                   [audio_config['min_frequency']],
-                                   [audio_config['max_frequency']],
-                                   [audio_config['custom_channel_mapping']],
-                                   [audio_config['custom_channel_frequencies']],
-                                   [CHUNK_SIZE],
-                                   [num_channels]], dtype=object)
-
-    # Compute the standard deviation and mean values for the cache
-    mean = [0 for _ in range(GPIOLEN)]
-    std = [0 for _ in range(GPIOLEN)]
-    for i in range(0, GPIOLEN):
-        std[i] = np.std([item for item in cache_matrix[:, i] if item > 0])
-        mean[i] = np.mean([item for item in cache_matrix[:, i] if item > 0])
-
-    # Save the cache using numpy savez
-    np.savez(cache_filename,
-             cache_matrix=cache_matrix,
-             mean=mean,
-             std=std,
-             cached_configuration=show_configuration)
-
-    logging.info("Cached sync data written to '." + cache_filename
-                 + "' [" + str(len(cache_matrix)) + " rows]")
-
-
-def create_cache(items):
-    """
-    Create sync file(s) for a single file or a playlist
-
-    :param items: string or list of strings, a playlist or filename
-    """
-    cache_matrix = np.empty(shape=[0, GPIOLEN])
-    mean = [0.0 for _ in range(GPIOLEN)]
-    std = [0.0 for _ in range(GPIOLEN)]
-
-    a_types = [".mp3", ".mp4", ".m4a", ".m4b", ".aac", ".ogg", ".flac", ".wma", ".wav"]
-
-    if os.path.splitext(os.path.basename(items))[1] in a_types:
-        playlist = [items]
-    else:
-        playlist = list()
-        with open(items, 'r') as playlist_items:
-            for line in playlist_items:
+        try:
+            while True:
+                temp = False
+                data, address = self.stream.recvfrom(4096)
                 try:
-                    temp = line.strip().split('\t')[1]
-                    if os.path.isfile(temp):
-                        playlist.append(temp)
-                except IOError:
-                    pass
+                    data = cPickle.loads(data)
+                    if len(data) == 1:
+                        logging.info("playing " + data[0])
+                        continue
+                    elif len(data) == 2:
+                        pins = [data[0]]
+                        brightness = float(data[1])
+                        temp = True
+                    elif len(data) == 3:
+                            matrix = data[0]
+                            mean = data[1]
+                            std = data[2]
+                            pins = [_ for _ in range(self.gpiolen)]
+                    else:
+                        continue
+                except (IndexError, cPickle.PickleError):
+                    matrix = std = mean = [0 for _ in range(self.gpiolen)]
+                
+                if not isinstance(pins, list):
+                    pins = [_ for _ in range(self.gpiolen)]
+                    matrix = std = mean = [0 for _ in range(self.gpiolen)]
+                
+                for pin in pins:
+                    if not temp:
+                        brightness = (matrix[pin] - mean[pin] + 0.5 * std[pin]) / 1.25 * std[pin]
+                        brightness = max(0.0, min(1.0, brightness))
+                        
+                    if pin in channels.keys():
+                        if channels[pin] < 0:
+                            continue
+                        for channel in channels[pin]:
+                            if self.not_pwm[channel]:
+                                self.turn_on_light(channel,True, float(brightness > 0.5))
+                            else:
+                                self.turn_on_light(channel, True, brightness)
+                temp = None
+        except KeyboardInterrupt:
+            logging.info("CTRL<C> pressed, stopping")
+            print "stopping"
+            self.stream.close()
 
-    for song in playlist:
-        logging.info("Generating sync file for :" + song)
-        per_song_config_filename = song + ".cfg"
-        per_song_config(per_song_config_filename)
+    def next_song(self):
+        """
+        Get the next song to play from the playlist
+        """
+        song_to_play = int(self.get_state('song_to_play', 0))
+        play_now = int(self.get_state('play_now', 0))
+        self.song_filename = args.file
 
-        if song.endswith('.wav'):
-            music_file = wave.open(song, 'r')
-        else:
-            music_file = decoder.open(song)
+        if args.playlist is not None and args.file is None:
+            most_votes = [None, None, []]
 
-        cache_filename = os.path.dirname(song) + "/." + os.path.basename(song) + ".sync.npz"
-        cache_matrix = playback(music_file, cache_matrix, std, mean, False, (None, None), song)
-        sample_rate = music_file.getframerate()
-        num_channels = music_file.getnchannels()
+            # read playlist from file
+            playlist = self.songs(args.playlist)
+            songs = []
+            for song in playlist:
+                if len(song) == 2:
+                    song.append(set())
+                else:
+                    song[2] = set(song[2].split(','))
+                    if len(song) == 3 and len(song[2]) >= len(most_votes[2]):
+                        most_votes = song
+                songs.append(song)
 
-        save_matrix(cache_filename, cache_matrix, sample_rate, num_channels)
+            if most_votes[0] is not None:
+                logging.info("Most Votes: " + str(most_votes))
+                current_song = most_votes
 
-        sys.stdout.write("\rSync file generated for  :%s %d%%" % (song, 100))
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-
-        logging.info("Sync file generated for :" + song)
-
-        # reset for next song
-        cache_matrix = list()
-        mean = [12.0 for _ in range(GPIOLEN)]
-        std = [1.5 for _ in range(GPIOLEN)]
-
-
-def read_cache(cache_filename, music_file):
-    """
-    Read sync file and validate cached data matches the loaded
-    configuration
-
-    :rtype : tuple of objects,
-             boolean, valid cache data found
-             numpy.std(), standard deviation of the fft data
-             numpy.mean(), mean of the fft data
-             numpy.array(), fft data  for the audio file
-    :param cache_filename: string, path and filename of cached data
-    :param music_file: decoder object, audio file
-    """
-    cache_found = False
-
-    sample_rate = music_file.getframerate()
-    num_channels = music_file.getnchannels()
-
-    # create empty array for the cache_matrix
-    cache_matrix = np.empty(shape=[0, GPIOLEN])
-
-    # The values 12 and 1.5 are good estimates for first time playing back 
-    # (i.e. before we have the actual mean and standard deviations 
-    # calculated for each channel).
-    mean = [12.0 for _ in range(GPIOLEN)]
-    std = [1.5 for _ in range(GPIOLEN)]
-
-    try:
-        # load cache from file
-        cache_arrays = np.load(cache_filename)
-
-        # get the current configuration to compare to
-        # what is stored in the cached array
-        # index 7 holds -1, reserved for future use
-        show_configuration = np.array([[GPIOLEN],
-                                       [sample_rate],
-                                       [audio_config['min_frequency']],
-                                       [audio_config['max_frequency']],
-                                       [audio_config['custom_channel_mapping']],
-                                       [audio_config['custom_channel_frequencies']],
-                                       [CHUNK_SIZE],
-                                       [num_channels]], dtype=object)
-
-        # cached hardware configuration from sync file
-        cached_configuration = cache_arrays["cached_configuration"]
-
-        # Compare current config to cached config
-        if (show_configuration == cached_configuration).all():
-            cache_found = True
-            std = cache_arrays["std"]
-            mean = cache_arrays["mean"]
-            cache_matrix = cache_arrays["cache_matrix"]
-
-        if cache_found:
-            logging.debug("std: " + str(std) + ", mean: " + str(mean))
-        else:
-            logging.warn('Cached configuration does not match current configuration.  '
-                         'Generating new cache file with current show configuration')
-    except IOError:
-        logging.warn("Cached sync data song_filename not found: '"
-                     + cache_filename
-                     + ".  One will be generated.")
-
-    return cache_found, std, mean, cache_matrix
-
-
-def playback(music_file, cache_matrix, std, mean, cache_found, output_device, song=None):
-    # Process audio song_filename
-    """
-    Playback the audio and trigger the lights
-
-    :param cache_matrix: numpy.array(), fft data for the audio file
-    :param std: numpy.std(), standard deviation of the fft data
-    :param mean: numpy.mean(), mean of the fft data
-    :param music_file: decoder object, audio file
-    :param cache_found: boolean, was a valid sync file found
-    :param output_device: tuple, (alsaaudio device data or None, fm process or None)
-    :return: numpy.array(), fft data for the audio file
-    """
-    play_now = int(cm.get_state('play_now', 0))
-    fm_process = output_device[0]
-    output = output_device[1]
-    sample_rate = music_file.getframerate()
-
-    row = 0
-    data = music_file.readframes(CHUNK_SIZE)
-    frequency_limits = calculate_channel_frequency()
-    total_frames = music_file.getnframes() / 100
-    counter = 0
-    percentage = 0
-
-    while data != '' and not play_now:
-        if fm_process:
-            os.write(music_pipe_w, data)
-        if output:
-            output.write(data)
-
-        # Control lights with cached timing values if they exist
-        matrix = None
-        if cache_found and args.readcache:
-            if row < len(cache_matrix):
-                matrix = cache_matrix[row].tolist()
+                for song in songs:
+                    if current_song == song and len(song) == 3:
+                        song.append("playing!")
+                    if len(song[2]) > 0:
+                        song[2] = ",".join(song[2])
+                    else:
+                        del song[2]
+                self.update_songs(args.playlist, songs)
             else:
-                logging.warning("Ran out of cached FFT values, will update the cache.")
-                cache_found = False
+                # Get a "play now" requested song
+                if 0 < play_now <= len(songs):
+                    current_song = songs[play_now - 1]
 
-        if matrix is None:
-            # No cache - Compute FFT in this chunk, and cache results
-            matrix = fft.calculate_levels(data,
-                                          CHUNK_SIZE,
-                                          sample_rate,
-                                          frequency_limits,
-                                          GPIOLEN)
+                # Get random song
+                elif self.randomize_playlist:
+                    # Use python's random.randrange() to get a random song
+                    current_song = songs[random.randrange(len(songs))]
 
-            # Add the matrix to the end of the cache 
-            cache_matrix = np.vstack([cache_matrix, matrix])
+                # Play next song in the lineup
+                else:
+                    if song_to_play <= len(songs) - 1:
+                        song_to_play = song_to_play
+                    else:
+                        song_to_play = 0
 
-        if not args.createcache:
-            update_lights(matrix, mean, std)
+                    current_song = songs[song_to_play]
 
-        # Read next chunk of data from music song_filename
-        data = music_file.readframes(CHUNK_SIZE)
-        row += 1
+                    if (song_to_play + 1) <= len(songs) - 1:
+                        next_song_to_play = (song_to_play + 1)
+                    else:
+                        next_song_to_play = 0
 
-        # Load new application state in case we've been interrupted
-        if not args.createcache:
-            cm.load_state()
-            play_now = int(cm.get_state('play_now', 0))
+                    self.update_state('song_to_play', next_song_to_play)
+
+            # Get filename to play and store the current song playing in state cfg
+            self.song_filename = current_song[1]
+            self.update_state('current_song', songs.index(current_song))
+
+        self.song_filename.replace("$SYNCHRONIZED_LIGHTS_HOME", self.HOME_DIR)
+
+    def set_up_audio(self):
+        """
+        Set up the audio output device(s)
+        """
+        if self.song_filename.endswith('.wav'):
+            self.music_file = wave.open(self.song_filename, 'r')
         else:
-            if counter > total_frames:
-                percentage += 1
-                counter = 0
-            counter += CHUNK_SIZE
-            sys.stdout.write("\rGenerating sync file for :%s %d%%" % (song, percentage))
+            self.music_file = decoder.open(self.song_filename)
+
+        self.sample_rate = self.music_file.getframerate()
+        self.num_channels = self.music_file.getnchannels()
+
+        # set audio playback device
+        if isinstance(self.audio_device, alsaaudio.PCM):
+            self.audio_device.setchannels(self.num_channels)
+            self.audio_device.setrate(self.sample_rate)
+            self.audio_device.setperiodsize(self.chunk_size)
+
+        # Output a bit about what we're about to play to the logs
+        self.song_filename = os.path.abspath(self.song_filename)
+        logging.info(
+            "Playing: " + self.song_filename + " (" + str(self.music_file.getnframes() / self.sample_rate) + " sec)")
+
+    def per_song(self):
+        """
+        Load the configuration for the audio file if it exists
+        set variables for playback hear and in the hardware_manager
+        """
+        # Get configuration for song playback
+        per_song_config_filename = self.song_filename + ".cfg"
+        if os.path.isfile(per_song_config_filename):
+            logging.info("loading custom configuration for " + per_song_config_filename)
+            
+            self.per_song_config(per_song_config_filename)
+            self.load_config()
+
+    def read_cache(self):
+        """
+        Read sync file and validate cached data matches the loaded
+        configuration
+        """
+        # Cached data filename
+        self.cache_found = False
+        self.cache_filename = os.path.dirname(self.song_filename) + "/." + os.path.basename(
+                                            self.song_filename) + ".sync.npz"
+        # create empty array for the cache_matrix
+        self.cache_matrix = list()
+        
+        # The values 12 and 1.5 are good estimates for first time playing back 
+        # (i.e. before we have the actual mean and standard deviations 
+        # calculated for each channel).
+        self.mean = [12.0 for _ in range(self.gpiolen)]
+        self.std = [1.5 for _ in range(self.gpiolen)]
+
+        try:
+            # load cache from file
+            cache_arrays = numpy.load(self.cache_filename)
+
+            # get the current configuration to compare to
+            # what is stored in the cached array
+            show_configuration = numpy.array([[self.gpiolen],
+                                        [self.sample_rate],
+                                        [self.audio_config['min_frequency']],
+                                        [self.audio_config['max_frequency']],
+                                        [self.audio_config['custom_channel_mapping']],
+                                        [self.audio_config['custom_channel_frequencies']],
+                                        [self.chunk_size],
+                                        [self.num_channels]], dtype=object)
+
+            # cached hardware configuration from sync file
+            cached_configuration = cache_arrays["cached_configuration"]
+
+            # Compare current config to cached config
+            if (show_configuration == cached_configuration).all():
+                self.cache_found = True
+                self.std = cache_arrays["std"].tolist()
+                self.mean = cache_arrays["mean"].tolist()
+                self.cache_matrix = cache_arrays["cache_matrix"].tolist()
+
+            if self.cache_found:
+                logging.debug("std: " + str(self.std) + ", mean: " + str(self.mean))
+            else:
+                logging.warn('Cached configuration does not match current configuration.  '
+                            'Generating new cache file with current show configuration')
+        except IOError:
+            logging.warn("Cached sync data song_filename not found: '"
+                         + self.cache_filename + "'.  One will be generated.")
+
+    def playback(self, song=None):
+        # Process audio song_filename
+        """
+        Playback the audio and trigger the lights
+        """
+        play_now = int(self.get_state('play_now', 0))
+
+        row = 0
+        counter = 0
+        percentage = 0
+        frequency_limits = self.calculate_channel_frequency()
+        total_frames = self.music_file.getnframes() / 100
+        cache_len = len(self.cache_matrix)
+
+        data = self.music_file.readframes(self.chunk_size)
+        
+        while data != '' and not play_now:
+            if self.fm_process and not args.createcache:
+                os.write(self.music_pipe_w, data)
+            if self.audio_device and not args.createcache:
+                self.audio_device.write(data)
+
+            # Control lights with cached timing values if they exist
+            matrix = None
+            if self.cache_found and args.readcache:
+                if row < cache_len:
+                    matrix = self.cache_matrix[row]
+                else:
+                    logging.warning("Ran out of cached FFT values, will update the cache.")
+                    self.cache_found = False
+
+            if matrix is None:
+                # No cache - Compute FFT in this chunk, and cache results
+                matrix = fft.calculate_levels(data, self.chunk_size, self.sample_rate, frequency_limits, self.gpiolen)
+
+                # Add the matrix to the end of the cache 
+                self.cache_matrix.append(matrix)
+                
+            # Load new application state in case we've been interrupted and
+            # update the lights
+            if not args.createcache:
+                if self.networking == "server":
+                    self.broadcast(matrix, self.mean, self.std)
+
+                for pin in range(self.gpiolen):
+                    # Calculate output pwm, where off is at some portion of the std below
+                    # the mean and full on is at some portion of the std above the mean.
+                    brightness = (matrix[pin] - self.mean[pin] + 0.5 * self.std[pin]) / 1.25 * self.std[pin]
+                    brightness = max(0.0, min(1.0, brightness))
+                    if self.not_pwm[pin]:
+                        # If pin is on / off mode we'll turn on at 1/2 brightness
+                        self.turn_on_light(pin, True, float(brightness > 0.5))
+                    else:
+                        self.turn_on_light(pin, True, brightness)
+                
+                self.load_state()
+                play_now = int(self.get_state('play_now', 0))
+            else:
+                if counter > total_frames:
+                    percentage += 1
+                    counter = 0
+        
+                counter += self.chunk_size
+                sys.stdout.write("\rGenerating sync file for :%s %d%%" % (song, percentage))
+                sys.stdout.flush()
+                
+            # Read next chunk of data from music song_filename
+            data = self.music_file.readframes(self.chunk_size)
+            row += 1
+            
+        # make sure lame ends
+        for proc in psutil.process_iter():
+            if proc.name() == "lame":
+                proc.kill()
+        
+    def save_matrix(self):
+        """
+        Save the data necessary for playback so that it will not need to
+        be calculated again
+        """
+        cache_matrix = numpy.array(self.cache_matrix)
+        
+        show_configuration = numpy.array([[self.gpiolen],
+                                    [self.sample_rate],
+                                    [self.audio_config['min_frequency']],
+                                    [self.audio_config['max_frequency']],
+                                    [self.audio_config['custom_channel_mapping']],
+                                    [self.audio_config['custom_channel_frequencies']],
+                                    [self.chunk_size],
+                                    [self.num_channels]], dtype=object)
+
+        # Compute the standard deviation and mean values for the cache
+        mean = [0 for _ in range(self.gpiolen)]
+        std = [0 for _ in range(self.gpiolen)]
+        for i in range(self.gpiolen):
+            std[i] = numpy.std([item for item in cache_matrix[:, i] if item > 0])
+            mean[i] = numpy.mean([item for item in cache_matrix[:, i] if item > 0])
+
+        # Save the cache
+        numpy.savez(self.cache_filename,
+                cache_matrix=cache_matrix,
+                mean=mean,
+                std=std,
+                cached_configuration=show_configuration)
+        
+        logging.info("Cached sync data written to '." + self.cache_filename
+                    + "' [" + str(len(cache_matrix)) + " rows]")
+
+    def create_cache(self, items):
+        """
+        Create sync file(s) for a single file or a playlist
+
+        :param items: string or list of strings, a playlist or filename
+        """
+        self.cache_found = False
+        a_types = [".mp3", ".mp4", ".m4a", ".m4b", ".aac", ".ogg", ".flac", ".wma", ".wav"]
+
+        if os.path.splitext(os.path.basename(items))[1] in a_types:
+            playlist = [items]
+        else:
+            playlist = list()
+            with open(items, 'r') as playlist_items:
+                for line in playlist_items:
+                    try:
+                        temp = line.strip().split('\t')[1]
+                        if os.path.isfile(temp):
+                            playlist.append(temp)
+                    except IOError:
+                        pass
+
+        for song in playlist:
+            self.cache_matrix = list()
+            self.mean = [12.0 for _ in range(self.gpiolen)]
+            self.std = [1.5 for _ in range(self.gpiolen)]
+            
+            logging.info("Generating sync file for :" + song)
+            
+            self.song_filename = song
+            self.per_song()
+
+            if song.endswith('.wav'):
+                self.music_file = wave.open(song, 'r')
+            else:
+                self.music_file = decoder.open(song)
+
+            self.sample_rate = self.music_file.getframerate()
+            self.num_channels = self.music_file.getnchannels()
+            
+            self.cache_filename = os.path.dirname(song) + "/." + os.path.basename(song) + ".sync.npz"
+            self.playback(song)
+
+            self.save_matrix()
+            
+            sys.stdout.write("\rSync file generated for  :%s %d%%" % (song, 100))
+            sys.stdout.write("\n")
             sys.stdout.flush()
 
-    return cache_matrix
+            logging.info("Sync file generated for :" + song)
+
+    def stop(self):
+        self.stop = True
+
+    def play_song(self):
+        """
+        Play the next song from the play list (or --file argument).
+        """
+        # Initialize Lights
+        if not self.__initialized:
+            self.initialize()
+            self.__initialized = True
+
+        play_now = int(self.get_state('play_now', 0))
+
+        self.cache_found = False
+        self.cache_matrix = list()
+        self.std = [12.0 for _ in range(self.gpiolen)]
+        self.mean = [1.5 for _ in range(self.gpiolen)]
+
+        # Handle the pre/post show
+        self.unset_playing()
+        if not play_now:
+            result = PrePostShow('preshow', self).execute()
+            if result == PrePostShow.play_now_interrupt:
+                play_now = int(self.get_state('play_now', 0))
+        self.set_playing()
+
+        # Determine the next file to play
+        self.next_song()
+
+        # Ensure play_now is reset before beginning playback
+        if play_now:
+            self.update_state('play_now', 0)
+
+        # Set up audio from file
+        self.set_up_audio()
+
+        # Get configuration for song playback
+        self.per_song()
+
+        # Read in cached fft data if it exists
+        if args.readcache:
+            self.read_cache()
+
+        # send song file name to clients for logging
+        if self.networking == 'server':        
+            self.broadcast(self.song_filename)
+
+        # Process audio song_filename and playback
+        self.playback()
+
+        # save the sync file if needed
+        if not self.cache_found:
+            # Save the cache matrix, std, mean and the show_configuration variables
+            # that matter in the fft calculation to a sync file for future playback
+            self.save_matrix()
+
+        # check for postshow
+        self.unset_playing()
+        PrePostShow('postshow', self).execute()
 
 
-def per_song_config(per_song_config_filename):
-    """
-    Load the configuration for the audio file if it exists
-    set variables for playback hear and in the hardware_manager
-
-    :param per_song_config_filename: string, path and filename
-    """
-    # Get configuration for song playback
-    global lightshow_config, audio_config
-    if os.path.isfile(per_song_config_filename):
-        logging.info("loading custom configuration for " + per_song_config_filename)
-        cm.per_song_config(per_song_config_filename)
-        lightshow_config = cm.lightshow()
-        audio_config = cm.audio_processing()
-        hc.load_config()
-
-
-def play_song():
-    """
-    Play the next song from the play list (or --file argument).
-    """
-    play_now = int(cm.get_state('play_now', 0))
-
-    cache_found = False
-
-    std = list()
-    mean = list()
-    for _ in range(GPIOLEN):
-        std.append(0.0)
-        mean.append(0.0)
-    cache_matrix = np.empty(shape=[0, GPIOLEN])
-
-    # Initialize Lights
-    hc.initialize()
-
-    # Handle the pre/post show
-    if not play_now:
-        result = PrePostShow('preshow', hc).execute()
-        if result == PrePostShow.play_now_interrupt:
-            play_now = int(cm.get_state('play_now', 0))
-
-    # Determine the next file to play
-    song_filename = next_song()
-
-    # Ensure play_now is reset before beginning playback
-    if play_now:
-        cm.update_state('play_now', 0)
-
-    # Set up audio from file
-
-    # set audio playback device
-    output_device, music_file = set_up_audio_output(song_filename)
-
-    sample_rate = music_file.getframerate()
-    num_channels = music_file.getnchannels()
-
-    # Output a bit about what we're about to play to the logs
-    song_filename = os.path.abspath(song_filename)
-    logging.info(
-        "Playing: " + song_filename + " (" + str(music_file.getnframes() / sample_rate) + " sec)")
-
-    # Get configuration for song playback
-    per_song_config_filename = song_filename + ".cfg"
-    per_song_config(per_song_config_filename)
-
-    # Cached data filename
-    cache_filename = os.path.dirname(song_filename) + "/." + os.path.basename(
-        song_filename) + ".sync.npz"
-
-    # Read in cached fft data if it exists
-    if args.readcache:
-        cache_found, std, mean, cache_matrix = read_cache(cache_filename, music_file)
-
-    # Process audio song_filename and playback
-    cache_matrix = playback(music_file, cache_matrix, std, mean, cache_found, output_device)
-
-    # save the sync file if needed
-    if not cache_found:
-        # Save the cache matrix, std, mean and the show_configuration variables
-        # that matter in the fft calculation to a sync file for future playback
-        save_matrix(cache_filename, cache_matrix, sample_rate, num_channels)
-
+#@atexit.register
+def on_exit(lightshow):
+    lightshow.clean_up()
+    
+    if lightshow.stream:
+        lightshow.stream.close()
+    
     # Cleanup the pifm process
-    if USEFM:
-        fm_process = output_device[0]
-        fm_process.kill()
-
-    # check for postshow
-    PrePostShow('postshow', hc).execute()
+    if lightshow.usefm:
+        lightshow.fm_process.kill()
 
 
 if __name__ == "__main__":
-    # parse command line arguments
-    parser = argparse.ArgumentParser()
-    filegroup = parser.add_mutually_exclusive_group()
-    filegroup.add_argument('--playlist', default=_PLAYLIST_PATH,
-                           help='Playlist to choose song from.')
-    filegroup.add_argument('--file', help='path to the song to play (required if no'
-                                          'playlist is designated)')
-    cachegroup = parser.add_mutually_exclusive_group()
-    cachegroup.add_argument('--readcache', type=bool, default=True,
-                            help='read light timing from cache if available. Default: true')
-    cachegroup.add_argument('--createcache', action="store_true",
-                            help='create light timing cache without audio playback or lightshow.')
-    parser.add_argument('--log', default='DEBUG',
-                        help='Set the logging level. levels:INFO, DEBUG, WARNING, ERROR, CRITICAL')
-
-    if parser.parse_args().createcache:
-        parser.set_defaults(readcache=False)
-
-    args = parser.parse_args()
-
-    # Log to our log file at the specified level
+    # logging levels
     levels = {'DEBUG': logging.DEBUG,
               'INFO': logging.INFO,
               'WARNING': logging.WARNING,
               'ERROR': logging.ERROR,
               'CRITICAL': logging.CRITICAL}
-
-    level = levels.get(args.log.upper())
-    logging.basicConfig(filename=cm.LOG_DIR + '/music_and_lights.play.dbg',
+    
+    level = logging.INFO
+    for item in sys.argv:
+        if "log" in item.lower():
+            idx = sys.argv.index(item)
+            if sys.argv[idx].lower().endswith("log"):
+                level = levels[sys.argv[idx + 1].upper()]
+            elif "log" in sys.argv[idx]:
+                level = levels[sys.argv[idx].split('=')[-1].upper()]
+                
+    # create default logger, level = INFO
+    logging.basicConfig(filename=hardware_manager.configuration_manager.LOG_DIR + '/music_and_lights.play.dbg',
                         format='[%(asctime)s] %(levelname)s {%(pathname)s:%(lineno)d}'
                                ' - %(message)s',
-                        level=level)
+                        level='INFO')
+    # parse command line arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--log', default='INFO',
+                        help='Set the logging level. levels:INFO, DEBUG, WARNING, ERROR, CRITICAL')
+    cachegroup = parser.add_mutually_exclusive_group()
+    cachegroup.add_argument('--readcache', type=bool, default=True,
+                            help='read light timing from cache if available. Default: true')
+    cachegroup.add_argument('--createcache', action="store_true",
+                            help='create light timing cache without audio playback or lightshow.')
+    filegroup = parser.add_mutually_exclusive_group()
+    filegroup.add_argument('--playlist', default='playlist_path',
+                           help='Playlist to choose song from.')
+    filegroup.add_argument('--file', help='path to the song to play (required if no'
+                                          'playlist is designated)')
 
-    # Begin audio playback
-    if _MODE == 'audio-in':
+    if parser.parse_args().createcache:
+        parser.set_defaults(readcache=False)
+
+     # Log to our log file at the specified level
+    level = levels.get(parser.parse_args().log.upper())
+    logging.getLogger().setLevel(level)
+
+    # lightshow instance
+    lightshow = Lightshow()
+    if parser.parse_args().playlist == 'playlist_path':
+        parser.set_defaults(playlist=lightshow.playlist_path)
+
+    args = parser.parse_args()
+    atexit.register(on_exit, lightshow)
+
+    if lightshow.mode == 'audio-in':
         audio_in()
+    elif lightshow.networking == "client":
+        lightshow.network_client()
     else:
+        # if file or playlist
         # Make sure one of --playlist or --file was specified
-        if args.file is None and args.playlist is None:
-            print "One of --playlist or --file must be specified"
-            sys.exit()
+        #if args.file is None and args.playlist is None:
+            #print "One of --playlist or --file must be specified"
+            #sys.exit(0)
 
         # Check if we are generating sync file(s) or playing a show
         if args.createcache:
-            create_cache(args.file or args.playlist)
+            lightshow.create_cache(args.file or args.playlist)
             sys.exit(0)
-
-        play_song()
+        else:
+            try:
+                lightshow.play_song()
+            except KeyboardInterrupt:
+                pass
+            
+    on_exit(lightshow)

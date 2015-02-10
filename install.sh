@@ -101,21 +101,31 @@ cd $BUILD_DIR
 if [ $? -ne 0 ]; then
 errchk "numpy" $?
 fi
+
 #install python-alsaaudio
 	sudo apt-get install -y python-alsaaudio
 if [ $? -ne 0 ]; then
 errchk "python-alsaaudio" $?
 fi
+
 #install audio encoders
 	sudo apt-get update && sudo apt-get install -y lame flac ffmpeg faad vorbis-tools
 if [ $? -ne 0 ]; then
 errchk "audio-encoders" $?
 fi
+
 #install mpg123
     sudo apt-get install -y mpg123
 if [ $? -ne 0 ]; then
 errchk "mpg123" $?
 fi
+
+#install python-psutil
+    sudo apt-get install -y python-psutil
+if [ $? -ne 0 ]; then
+errchk "python-psutil" $?
+fi
+
 
 #Setup environment variables
 ENV_VARIABLE="SYNCHRONIZED_LIGHTS_HOME=${INSTALL_DIR}"
@@ -162,5 +172,5 @@ echo
 echo "You may need to reboot your Raspberry Pi before running lightshowPi (sudo reboot)."
 echo "Run the following command to test your installation and hardware setup (press CTRL-C to stop the test):"
 echo
-echo "sudo $INSTALL_DIR/py/hardware_controller.py --state flash"
+echo "sudo python $INSTALL_DIR/py/hardware_manager.py --state flash"
 echo

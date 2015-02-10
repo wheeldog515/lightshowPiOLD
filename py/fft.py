@@ -13,10 +13,10 @@ Third party dependencies:
 
 numpy: for FFT calculation - http://www.numpy.org/
 """
-import sys
-
-import numpy as np
-
+#import numpy as np
+from numpy import sum as npsum
+from numpy import abs as npabs
+from numpy import log10, frombuffer, empty, hanning, fft, delete, int16, zeros
 
 def calculate_levels(data, chunk_size, sample_rate, frequency_limits, gpiolen, channels=2):
     """
@@ -38,10 +38,10 @@ def calculate_levels(data, chunk_size, sample_rate, frequency_limits, gpiolen, c
     """
 
     # create a numpy array, taking just the left channel if stereo
-    data_stereo = np.frombuffer(data, dtype=np.int16)
+    data_stereo = frombuffer(data, dtype=int16)
     if channels == 2:
         # data has 2 bytes per channel
-        data = np.empty(len(data) / (2 * channels))
+        data = empty(len(data) / (2 * channels))
 
         # pull out the even values, just using left channel
         data[:] = data_stereo[::2]
@@ -51,19 +51,20 @@ def calculate_levels(data, chunk_size, sample_rate, frequency_limits, gpiolen, c
     # if you take an FFT of a chunk of audio, the edges will look like
     # super high frequency cutoffs. Applying a window tapers the edges
     # of each end of the chunk down to zero.
-    window = np.hanning(len(data))
-    data = data * window
+    #window = np.hanning(len(data))
+    #data = data * window
+    data *= hanning(len(data))
 
     # Apply FFT - real data
-    fourier = np.fft.rfft(data)
+    fourier = fft.rfft(data)
 
     # Remove last element in array to make it the same size as chunk_size
-    fourier = np.delete(fourier, len(fourier) - 1)
+    fourier = delete(fourier, len(fourier) - 1)
 
     # Calculate the power spectrum
-    power = np.abs(fourier) ** 2
+    power = npabs(fourier) ** 2
 
-    matrix = np.zeros(gpiolen, dtype='float64')
+    matrix = zeros(gpiolen, dtype='float64')
     for pin in range(gpiolen):
         # take the log10 of the resulting sum to approximate how human ears 
         # perceive sound levels
@@ -80,12 +81,12 @@ def calculate_levels(data, chunk_size, sample_rate, frequency_limits, gpiolen, c
         if idx1 == idx2:
             idx2 += 1
         
-        npsum = np.sum(power[idx1:idx2:1])
+        npsums = npsum(power[idx1:idx2:1])
         
         # if the sum is 0 lets not take log10, just use 0
-        if npsum == 0:
+        if npsums == 0:
             matrix[pin] = 0
         else:
-            matrix[pin] = np.log10(npsum)
+            matrix[pin] = log10(npsums)
 
     return matrix

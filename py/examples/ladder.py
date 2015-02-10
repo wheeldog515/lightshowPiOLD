@@ -15,8 +15,7 @@ def main(exit_event):
     Then repeat everything 20 times
     """
     # this is a list of all the channels you have access to
-    lights = hc.GPIO_PINS
-
+    lights = hc.gpio_pins
     # start with all the lights off
     hc.turn_off_lights()
 

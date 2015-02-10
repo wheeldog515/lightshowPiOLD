@@ -13,7 +13,7 @@ def main(exit_event):
     Start at each end and walk to the other using pwm
     """
     # this is a list of all the channels you have access to
-    lights = [pin for pin in range(len(hc._GPIO_PINS))]
+    lights = [pin for pin in range(len(hc.gpio_pins))]
     
     # the gpio pins in reversed order
     lights2 = lights[::-1]
