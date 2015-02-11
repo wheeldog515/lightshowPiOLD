@@ -321,14 +321,24 @@ class Lightshow(hardware_manager.Hardware):
             
         print "press CTRL<C> to end"
         self.initialize()
-
+        print
+        song = "Waiting for data"
         try:
             while True:
                 temp = False
-                data, address = self.stream.recvfrom(4096)
+                data = None
+                
                 try:
+                    sys.stdout.write("\rReceiving data for: %s" % (song))
+                    sys.stdout.flush()
+                    data, address = self.stream.recvfrom(4096)
                     data = cPickle.loads(data)
+
+                    if not data:
+                        continue
+                    
                     if len(data) == 1:
+                        song = data[0].split("/")[-1]
                         logging.info("playing " + data[0])
                         continue
                     elif len(data) == 2:
@@ -362,7 +372,6 @@ class Lightshow(hardware_manager.Hardware):
                                 self.turn_on_light(channel,True, float(brightness > 0.5))
                             else:
                                 self.turn_on_light(channel, True, brightness)
-                temp = None
         except KeyboardInterrupt:
             logging.info("CTRL<C> pressed, stopping")
             print "stopping"
