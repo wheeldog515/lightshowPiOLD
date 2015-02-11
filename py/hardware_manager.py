@@ -34,16 +34,24 @@ import configuration_manager
 # NOTE: Only works on linux
 pi = True
 
+
 if "raspberrypi" in platform.uname():
-    #from wiringpi2 import *
-    import wiringpi2 as wiringpi
+    # load wiringPi
+    import wiringpi2 as wiringPi
+    #from wiringPi2 import *
 else:
-    import light_simulator as wiringpi
+    # if this is not a RPi you can't run wiringPi so lets load the 
+    # simulator as wiringPi
+    import light_simulator as wiringPi
     #from light_simulator import *
     pi = False
 
 
 class Pin(object):
+    """
+    Pin class
+    """
+    
     
     def __init__(self, pin_number, pin_mode, active_low_mode, pwm_max):
         self.pin_number = pin_number
@@ -66,7 +74,7 @@ class Pin(object):
         
     def __str__(self):
         """
-        
+        String method for debugging
         """
         gpio_pin_number = "channel number: " + str(self.pin_number) + "\n"
         pwm_mode = "in pwm mode: " + str(self.pwm) + "\n"
@@ -89,20 +97,20 @@ class Pin(object):
 
     def set_as_input(self):
         """
-        
+        set up this pin as input
         """
         self.inout = 'pin is input'
-        wiringpi.pinMode(self.pin_number, 0)
+        wiringPi.pinMode(self.pin_number, 0)
     
     def set_as_output(self):
         """
-        
+        set up this pin as output
         """
         self.inout = 'pin is output'
         if self.pwm:
-            wiringpi.softPwmCreate(self.pin_number, 0, self.pwm_max)
+            wiringPi.softPwmCreate(self.pin_number, 0, self.pwm_max)
         else:
-            wiringpi.pinMode(self.pin_number, 1)
+            wiringPi.pinMode(self.pin_number, 1)
 
     def set_always_on(self, value):
         """
@@ -139,31 +147,35 @@ class Pin(object):
         1.0 is full on
         
         """
-        #if self.active_low_mode:
-            #brightness = 1.0 - brightness
         if use_overrides:
+            # if always on, set brightness to 1, int value of True is 1
             brightness = max(int(self.always_on), brightness)
+            
+            # if always off, set brightness to 0, int value of False is 0 
             brightness = min(int(not self.always_off), brightness)
+            
+            # if inverted subtrack the brightness from value of inverted
+            # taking the absolute value insures a positive number 
             brightness = abs(int(self.inverted) - brightness)
 
-            #if self.always_off:
-                #brightness = 0
-            #elif self.always_on:
-                #brightness = 1
-            #if self.inverted:
-                #brightness = 1 - brightness
+        # account for active low mode
+        # taking the absolute value insures a positive number 
         brightness = abs(int(self.active_low_mode) - brightness)
+
         if self.pwm:
-            wiringpi.softPwmWrite(self.pin_number, int(brightness * self.pwm_max))
+            wiringPi.softPwmWrite(self.pin_number, int(brightness * self.pwm_max))
         else:
-            wiringpi.digitalWrite(self.pin_number, int(brightness))
+            wiringPi.digitalWrite(self.pin_number, int(brightness))
 
         self.state = brightness
 
 class Hardware(configuration_manager.Configuration):
     
     def __init__(self):
+        # inherit configuration_manager
         super(Hardware, self).__init__()
+        
+        # list to store the Pins instances in
         self.lights = list()
         
         self.devices = self.hardware_config['devices']
@@ -177,6 +189,7 @@ class Hardware(configuration_manager.Configuration):
         self.port = self.network_config['port']
         self.playing = False
         self.vr = None
+        self.streaming = None
 
         self.is_pin_pwm = list()
         for pmode in range(len(self.pin_modes)):
@@ -194,19 +207,31 @@ class Hardware(configuration_manager.Configuration):
 
     def set_playing(self):
         """
+        Set a flag for playing,
         
+        Setting this flag allows for synchronized_lights.py to broadcast
+        the matrix, std, and mean.
+        If this flag is set to False the turn_off_light/turn_on_light methods
+        will broadcast the pin number and brightness.  Usefull if you want
+        to broadcast the pre/post show data to your clients without codding
+        the pre/post shows config or scripts to broadcast. Allowing then to
+        remain unchanged
         """
         self.playing = True
 
     def unset_playing(self):
         """
-        
+        Unset the playing flag.
         """
         self.playing = False
 
     def create_lights(self):
         """
-        
+        Create a Pin instance for each gpio pin to be used, 
+        setting up
+        1. the pin mode <onoff|pwm>
+        2. if it is to be used in active low mode
+        3. the the max value if in pwm mode
         """
         for channel in range(self.gpiolen):
             pin = self.gpio_pins[channel]
@@ -219,7 +244,7 @@ class Hardware(configuration_manager.Configuration):
             
     def set_overrides(self):
         """
-        
+        Set override flags if they are to be used
         """
         for channel in range(self.gpiolen):
             self.lights[channel].set_always_off(channel + 1 in self.lightshow_config['always_off_channels'])
@@ -228,7 +253,7 @@ class Hardware(configuration_manager.Configuration):
             
     def setup_network(self):
         """
-        
+        Setup network broadcast stream if this RPi is to be serving data
         """
         print "streaming on port: " + str(self.port)
         try:
@@ -255,14 +280,14 @@ class Hardware(configuration_manager.Configuration):
                 if device.lower() == "mcp23017":
                     for slave in device_slaves:
                         params = slave
-                        wiringpi.mcp23017Setup(int(params['pinBase']),
+                        wiringPi.mcp23017Setup(int(params['pinBase']),
                                       int(params['i2cAddress'], 16))
                 
                 # mcp23s17
                 elif device.lower() == "mcp23s17":
                     for slave in device_slaves:
                         params = slave
-                        wiringpi.mcp23s17Setup(int(params['pinBase']),
+                        wiringPi.mcp23s17Setup(int(params['pinBase']),
                                       int(params['spiPort'], 16),
                                       int(params['devId']))
                 
@@ -273,21 +298,21 @@ class Hardware(configuration_manager.Configuration):
                 elif device.lower() == "mcp23016":
                     for slave in device_slaves:
                         params = slave
-                        wiringpi.mcp23016Setup(int(params['pinBase']),
+                        wiringPi.mcp23016Setup(int(params['pinBase']),
                                       int(params['i2cAddress'], 16))
 
                 # mcp23s08 - Needs Testing
                 elif device.lower() == "mcp23008":
                     for slave in device_slaves:
                         params = slave
-                        wiringpi.mcp23008Setup(int(params['pinBase']),
+                        wiringPi.mcp23008Setup(int(params['pinBase']),
                                       int(params['i2cAddress'], 16))
 
                 # mcp23s08 - Needs Testing
                 elif device.lower() == "mcp23s08":
                     for slave in device_slaves:
                         params = slave
-                        wiringpi.mcp23s08Setup(int(params['pinBase']),
+                        wiringPi.mcp23s08Setup(int(params['pinBase']),
                                       int(params['spiPort'], 16),
                                       int(params['devId']))
 
@@ -295,7 +320,7 @@ class Hardware(configuration_manager.Configuration):
                 elif device.lower() == "sr595":
                     for slave in device_slaves:
                         params = slave
-                        wiringpi.sr595Setup(int(params['pinBase']),
+                        wiringPi.sr595Setup(int(params['pinBase']),
                                    int(params['numPins']),
                                    int(params['dataPin']),
                                    int(params['clockPin']),
@@ -305,7 +330,7 @@ class Hardware(configuration_manager.Configuration):
                 elif device.lower() == "pcf8574":
                     for slave in device_slaves:
                         params = slave
-                        wiringpi.pcf8574Setup(int(params['pinBase']),
+                        wiringPi.pcf8574Setup(int(params['pinBase']),
                                      int(params['i2cAddress'], 16))
 
                 else:
@@ -377,26 +402,31 @@ class Hardware(configuration_manager.Configuration):
 
         self.lights[pin].light_action(use_overrides, brightness)
         
-    def turn_off_light(self, pin, use_overrides=False):
+    def turn_off_light(self, pin, use_overrides=False, brightness=0.0):
         """
         Turn off the specified light
 
         Taking into account various overrides if specified.
         :param pin: int, index of pin in gpio_pins
         :param use_overrides: int or boolean, should overrides be used
+        :param brightness: float, between 0.0 and 1.0, brightness of light
         """
         if not self.playing and self.networking == "server":
             self.broadcast(pin, 0.0)
             
-        self.lights[pin].light_action(use_overrides, 0.0)
+        self.lights[pin].light_action(use_overrides, brightness)
         
     def broadcast(self, *args):
         """
-        
+        Broacast data over the network
         """
         if self.networking == "server":
-            data = cPickle.dumps(args)
-            self.streaming.sendto(data,('<broadcast>', self.port))
+            try:
+                data = cPickle.dumps(args)
+                self.streaming.sendto(data,('<broadcast>', self.port))
+            except socket.error , msg:
+                logging.error(str(msg[0]) + ' ' + msg[1])
+                print str(msg[0]) + ' ' + msg[1]
 
     def clean_up(self):
         """
@@ -418,23 +448,35 @@ class Hardware(configuration_manager.Configuration):
             
         if not pi and self.vr:
             if self.vr.isAlive():
-                wiringpi.quit()
+                wiringPi.quit()
                 #self.vr._Thread__stop()
+        
+        if self.streaming:
+            try:
+                self.streaming.close()
+            except socket.error , msg:
+                logging.error(str(msg[0]) + ' ' + msg[1])
+                print str(msg[0]) + ' ' + msg[1]
             
     def initialize(self):
         """Set pins as outputs, and start all lights in the off state."""
+        # if not running on a Raspberry Pi display a Tkinter window 
+        # in a seperate thread to simulate the RPi's gpio pins
         if not pi:
             gpioactive = int(not self.active_low_mode)
-            self.vr = threading.Thread(target=wiringpi.ui, args=(self.gpio_pins, self.gpiolen, self.pwm_max, gpioactive))
+            self.vr = threading.Thread(target=wiringPi.ui, args=(self.gpio_pins, self.gpiolen, self.pwm_max, gpioactive))
             self.vr.start()
             time.sleep(1)
             
-        wiringpi.wiringPiSetup()
+        wiringPi.wiringPiSetup()
         self.enable_device()
         self.set_pins_as_outputs()
         self.turn_off_lights()
 
     def load_config(self):
+        """
+        Reload channel override settings
+        """
         logging.info("Reloading config")
         self.set_overrides()
 
@@ -512,6 +554,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
