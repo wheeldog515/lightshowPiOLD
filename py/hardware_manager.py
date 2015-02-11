@@ -425,8 +425,9 @@ class Hardware(configuration_manager.Configuration):
                 data = cPickle.dumps(args)
                 self.streaming.sendto(data,('<broadcast>', self.port))
             except socket.error , msg:
-                logging.error(str(msg[0]) + ' ' + msg[1])
-                print str(msg[0]) + ' ' + msg[1]
+                if msg[0] != 9:
+                    logging.error(str(msg[0]) + ' ' + msg[1])
+                    print str(msg[0]) + ' ' + msg[1]
 
     def clean_up(self):
         """
@@ -436,27 +437,14 @@ class Hardware(configuration_manager.Configuration):
         """
         self.turn_off_lights()
         self.set_pins_as_inputs()
-        
-        #try:
-            #if self.networking == "server":
-                #for pin in range(self.gpiolen):
-                    #self.broadcast(pin, 0)
-                #self.streaming.close()
-        #except socket.error , msg:
-            #logging.error(str(msg[0]) + ' ' + msg[1])
-            #print str(msg[0]) + ' ' + msg[1]
             
         if not pi and self.vr:
             if self.vr.isAlive():
                 wiringPi.quit()
-                #self.vr._Thread__stop()
-        
-        if self.streaming:
-            try:
-                self.streaming.close()
-            except socket.error , msg:
-                logging.error(str(msg[0]) + ' ' + msg[1])
-                print str(msg[0]) + ' ' + msg[1]
+        try:
+            self.streaming.close()
+        except:
+            pass
             
     def initialize(self):
         """Set pins as outputs, and start all lights in the off state."""

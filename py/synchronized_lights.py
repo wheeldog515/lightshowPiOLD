@@ -80,8 +80,14 @@ import numpy
 from prepostshow import PrePostShow
 
 class Lightshow(hardware_manager.Hardware):
+    """
+    Lightshow class
     
+    Play any audio file and synchronize lights to the music
+    """
+
     def __init__(self):
+        # inherit hardware_manager and configuration_manager
         super(Lightshow, self).__init__()
 
         self.mode = self.lightshow_config['mode']
@@ -104,9 +110,17 @@ class Lightshow(hardware_manager.Hardware):
         self.stop_the_show = False
         self.__initialized = False
         
-        self.output_device()
+        self.sound_device()
 
-    def output_device(self):
+    def sound_device(self):
+        """
+        Setup the sound device
+        
+        Setup the sound device for use in the show
+        PiFm
+        onboard sound
+        or a usb sound card        
+        """
         if self.usefm:
             self.fm_frequency = self.audio_config['frequency']
             self.music_pipe_r, self.music_pipe_w = os.pipe()
@@ -142,6 +156,7 @@ class Lightshow(hardware_manager.Hardware):
         :param mean: numpy.mean()
         :param matrix: list of floats
         """
+        # broadcast to clients if in server mode
         if self.networking == "server":
             self.broadcast(matrix, mean, std)
 
@@ -299,9 +314,13 @@ class Lightshow(hardware_manager.Hardware):
             print "\nStopping"
             self.clean_up()
 
-    # If in client mode, ignore everything else (FFT calcs etc) and just
-    # read data from the network and blink the lights
     def network_client(self):
+        """
+        Network client support
+        
+        If in client mode, ignore everything else and just
+        read data from the network and blink the lights
+        """
         logging.info("Network client mode starting")
         print "Network client mode starting..."
         try:
@@ -334,9 +353,6 @@ class Lightshow(hardware_manager.Hardware):
                     data, address = self.stream.recvfrom(4096)
                     data = cPickle.loads(data)
 
-                    if not data:
-                        continue
-                    
                     if len(data) == 1:
                         song = data[0].split("/")[-1]
                         logging.info("playing " + data[0])
@@ -533,9 +549,10 @@ class Lightshow(hardware_manager.Hardware):
                          + self.cache_filename + "'.  One will be generated.")
 
     def playback(self, song=None):
-        # Process audio song_filename
         """
         Playback the audio and trigger the lights
+        
+        Process audio song_filename
         """
         play_now = int(self.get_state('play_now', 0))
 
@@ -692,6 +709,11 @@ class Lightshow(hardware_manager.Hardware):
             logging.info("Sync file generated for :" + song)
 
     def stop(self):
+        """
+        Stop the show
+        
+        Not implemented yet
+        """
         self.stop = True
 
     def play_song(self):
@@ -755,6 +777,10 @@ class Lightshow(hardware_manager.Hardware):
 
 #@atexit.register
 def on_exit(lightshow):
+    """
+    Preform these actions on exit
+    """    
+    lightshow.unset_playing()
     lightshow.clean_up()
     
     if lightshow.stream:
@@ -822,12 +848,6 @@ if __name__ == "__main__":
     elif lightshow.networking == "client":
         lightshow.network_client()
     else:
-        # if file or playlist
-        # Make sure one of --playlist or --file was specified
-        #if args.file is None and args.playlist is None:
-            #print "One of --playlist or --file must be specified"
-            #sys.exit(0)
-
         # Check if we are generating sync file(s) or playing a show
         if args.createcache:
             lightshow.create_cache(args.file or args.playlist)

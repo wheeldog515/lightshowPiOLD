@@ -160,7 +160,7 @@ def main():
                 msg.delete(1)
 
             time.sleep(15)
-        except:
+        except LoginError:
             pass
 
 if __name__ == "__main__":
