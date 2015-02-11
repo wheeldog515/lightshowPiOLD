@@ -64,14 +64,20 @@ import atexit
 import cPickle
 import logging
 import os
-import psutil
+#import psutil
 import random
 import socket
 import subprocess
 import sys
 import wave
 
-import alsaaudio
+try:
+    import alsaaudio
+    alsa_used = True
+except ImportError:
+    import pyaudio
+    alsa_used = False
+    
 import decoder
 import fft
 import hardware_manager
@@ -143,9 +149,11 @@ class Lightshow(hardware_manager.Hardware):
             self.audio_device = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, self.lightshow_config['audio_in_card'])
             self.audio_device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
         else:
-            self.audio_device = alsaaudio.PCM(alsaaudio.PCM_PLAYBACK, alsaaudio.PCM_NORMAL)
-            self.audio_device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
-         
+            if alsa_used:
+                self.audio_device = alsaaudio.PCM(alsaaudio.PCM_PLAYBACK, alsaaudio.PCM_NORMAL)
+                self.audio_device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+            else:
+                self.pyaudio_audio_device = pyaudio.PyAudio()
     def update_lights(self, matrix, mean, std):
         """
         Update the state of all the lights
@@ -473,10 +481,16 @@ class Lightshow(hardware_manager.Hardware):
         self.num_channels = self.music_file.getnchannels()
 
         # set audio playback device
-        if isinstance(self.audio_device, alsaaudio.PCM):
+        if alsa_used:
             self.audio_device.setchannels(self.num_channels)
             self.audio_device.setrate(self.sample_rate)
             self.audio_device.setperiodsize(self.chunk_size)
+        else:
+            audio_format = self.pyaudio_audio_device.get_format_from_width(self.music_file.getsampwidth())
+            self.audio_device = self.pyaudio_audio_device.open(format=audio_format,
+                                                               channels=self.num_channels,
+                                                               rate=self.sample_rate,
+                                                               output=True)
 
         # Output a bit about what we're about to play to the logs
         self.song_filename = os.path.abspath(self.song_filename)
@@ -620,9 +634,10 @@ class Lightshow(hardware_manager.Hardware):
             row += 1
             
         # make sure lame ends
-        for proc in psutil.process_iter():
-            if proc.name() == "lame":
-                proc.kill()
+        music_file.close()
+        #for proc in psutil.process_iter():
+            #if proc.name() == "lame":
+                #proc.kill()
         
     def save_matrix(self):
         """

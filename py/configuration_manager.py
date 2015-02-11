@@ -16,7 +16,11 @@ manage these configuration files.
 """
 
 import ConfigParser
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    import portalocker as fcntl
+
 import json
 import logging
 import os

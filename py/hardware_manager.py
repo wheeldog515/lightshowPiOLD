@@ -31,7 +31,9 @@ import configuration_manager
 
 # Are we running this on a raspberry pi?
 # if not then use Tkinter to show what is happening
-# NOTE: Only works on linux
+# NOTE: Works on linux, and windows, untested on mac
+#       It might work on a mac, but I do not have one for testing
+
 pi = True
 
 
@@ -44,6 +46,8 @@ else:
     # simulator as wiringPi
     import light_simulator as wiringPi
     #from light_simulator import *
+    import Tkinter
+
     pi = False
 
 
@@ -451,8 +455,16 @@ class Hardware(configuration_manager.Configuration):
         # if not running on a Raspberry Pi display a Tkinter window 
         # in a seperate thread to simulate the RPi's gpio pins
         if not pi:
+            linux = True
+
+            if platform.system() == "Windows":
+                self.parent = Tkinter.Tk() 
+                self.canvas = Tkinter.Canvas(self.parent)
+                wiringPi.s_global(self.parent, self.canvas)
+                linux = False
+
             gpioactive = int(not self.active_low_mode)
-            self.vr = threading.Thread(target=wiringPi.ui, args=(self.gpio_pins, self.gpiolen, self.pwm_max, gpioactive))
+            self.vr = threading.Thread(target=wiringPi.ui, args=(self.gpio_pins, self.gpiolen, self.pwm_max, gpioactive, linux))
             self.vr.start()
             time.sleep(1)
             

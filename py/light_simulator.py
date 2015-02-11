@@ -36,8 +36,12 @@ blue = "#0000FF"
 white = "#FFFFFF"
 black = "#000000"
 
-
-def ui(gpins, glen, pmax, gactive):
+def s_global(p,c):
+    global parent, canvas
+    parent = p
+    canvas = c
+    
+def ui(gpins, glen, pmax, gactive, linux):
     """
     
     """
@@ -47,9 +51,10 @@ def ui(gpins, glen, pmax, gactive):
     gpiolen = glen
     pwm_max = pmax
     gpioactive = gactive
-    
-    parent = Tkinter.Tk()    
-    
+    if linux:
+        parent = Tkinter.Tk()   
+        canvas = Tkinter.Canvas(parent)
+
     row_length = gpiolen
 
     if gpiolen > max_row_length:
@@ -65,7 +70,6 @@ def ui(gpins, glen, pmax, gactive):
     parent.geometry('{0:d}x{1:d}+{2:d}+{3:d}'.format(width, height, screen_x, screen_y))
     parent.title("Lights")        
     parent.protocol("WM_DELETE_WINDOW", quit)
-    canvas = Tkinter.Canvas(parent)
 
     x1, y1 = x, y
     
@@ -116,15 +120,12 @@ def softPwmWrite(gpin, brightness):
     :param gpin, int, to be used as index of gpio pin to use
     :param birghtness, int, brightness of light
     """
-    try:
-        pin = gpio_pins.index(gpin)
-        if gpioactive:
-            brightness = 100 - brightness
-        level = '#{0:02X}{1:02X}{2:02X}'.format(255, int(ceil(brightness * 2.55)), int(ceil(brightness * 2.55)))
-        canvas.itemconfig(gpio[pin], fill=level)
-        parent.update()
-    except:
-        pass
+    pin = gpio_pins.index(gpin)
+    if gpioactive:
+        brightness = 100 - brightness
+    level = '#{0:02X}{1:02X}{2:02X}'.format(255, int(ceil(brightness * 2.55)), int(ceil(brightness * 2.55)))
+    canvas.itemconfig(gpio[pin], fill=level)
+    parent.update()
 
 def digitalWrite(gpin, onoff):
     """
@@ -132,14 +133,11 @@ def digitalWrite(gpin, onoff):
     :param gpin, int, to be used as index of gpio pin to use
     :param onoff, on or off
     """
-    try:
-        pin = gpio_pins.index(gpin)
-        if gpioactive:
-            onoff = 1 - onoff
-        canvas.itemconfig(gpio[pin], fill=(blue, white)[onoff])
-        parent.update()
-    except:
-        pass
+    pin = gpio_pins.index(gpin)
+    if gpioactive:
+        onoff = 1 - onoff
+    canvas.itemconfig(gpio[pin], fill=(blue, white)[onoff])
+    parent.update()
 
 # Empty functions, most will remain empty as they are not needed
 # but we can implement any that are needed in the future.
