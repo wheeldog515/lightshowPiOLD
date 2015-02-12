@@ -18,6 +18,7 @@ from numpy import sum as npsum
 from numpy import abs as npabs
 from numpy import log10, frombuffer, empty, hanning, fft, delete, int16, zeros
 
+
 def calculate_levels(data, chunk_size, sample_rate, frequency_limits, gpiolen, channels=2):
     """
     Calculate frequency response for each channel defined in frequency_limits

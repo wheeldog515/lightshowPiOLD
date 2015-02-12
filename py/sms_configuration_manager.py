@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+# !/usr/bin/env python
 #
 # Licensed under the BSD license.  See full license in LICENSE file.
 # http://www.lightshowpi.com/
@@ -29,13 +29,13 @@ HOME_DIR = os.getenv("SYNCHRONIZED_LIGHTS_HOME")
 if not HOME_DIR:
     if not "raspberrypi" in os.uname():
         d = os.path.dirname(os.path.abspath(__file__))
-        
+
         HOME_DIR = d[:d.rfind('/')]
     else:
         print("Need to setup SYNCHRONIZED_LIGHTS_HOME environment variable, "
-            "see readme")
+              "see readme")
         sys.exit()
-    
+
 CONFIG_DIR = HOME_DIR + '/config'
 LOG_DIR = HOME_DIR + '/logs'
 
@@ -50,27 +50,28 @@ def _as_list(list_str, delimiter=','):
     """
     return [str.strip(item) for item in list_str.split(delimiter)]
 
-class Configuration(object):
 
+class Configuration(object):
     def __init__(self):
         self.HOME_DIR = HOME_DIR
         self.CONFIG_DIR = HOME_DIR + '/config'
         self.LOG_DIR = HOME_DIR + '/logs'
-        
-        self._SMS_CONFIG = dict()
-        self._WHO_CAN = dict()
-        self._SONG_LIST = list()
-        
+
+        self.sms_config = dict()
+        self.who_can = dict()
+        self.song_list = list()
+
         self.CONFIG = ConfigParser.RawConfigParser(allow_no_value=True)
         self.CONFIG.readfp(open(self.CONFIG_DIR + '/defaults.cfg'))
         self.CONFIG.read([self.CONFIG_DIR + '/overrides.cfg', '/home/pi/.lights.cfg',
-                    os.path.expanduser('~/.lights.cfg')])
+                          os.path.expanduser('~/.lights.cfg')])
 
         # Load application state configuration file from CONFIG directory.
         self.STATE = ConfigParser.RawConfigParser()
         self.STATE_SECTION = 'do_not_modify'
         self.STATE_FILENAME = self.CONFIG_DIR + '/state.cfg'
 
+        self.playlist_path = None
         # Ensure state file has been created
         if not os.path.isfile(self.STATE_FILENAME):
             open(self.STATE_FILENAME, 'a').close()
@@ -83,60 +84,61 @@ class Configuration(object):
 
         :rtype : dictionary, items in config section
         """
-        self.playlist_path = self.CONFIG.get('lightshow', 'playlist_path').replace('$SYNCHRONIZED_LIGHTS_HOME', HOME_DIR)
-        
-        for key, value in self.CONFIG.items('sms'):
-            self._SMS_CONFIG[key] = value
+        self.playlist_path = self.CONFIG.get('lightshow', 'playlist_path').replace(
+            '$SYNCHRONIZED_LIGHTS_HOME', HOME_DIR)
 
-        self._WHO_CAN['all'] = set()
+        for key, value in self.CONFIG.items('sms'):
+            self.sms_config[key] = value
+
+        self.who_can['all'] = set()
 
         # Commands
-        self._SMS_CONFIG['enable'] = self.CONFIG.getboolean('sms', 'enable')
-        self._SMS_CONFIG['commands'] = _as_list(self._SMS_CONFIG['commands'])
-        for cmd in self._SMS_CONFIG['commands']:
+        self.sms_config['enable'] = self.CONFIG.getboolean('sms', 'enable')
+        self.sms_config['commands'] = _as_list(self.sms_config['commands'])
+        for cmd in self.sms_config['commands']:
             try:
-                self._SMS_CONFIG[cmd + '_aliases'] = _as_list(self._SMS_CONFIG[cmd + '_aliases'])
+                self.sms_config[cmd + '_aliases'] = _as_list(self.sms_config[cmd + '_aliases'])
             except:
-                self._SMS_CONFIG[cmd + '_aliases'] = []
-            self._WHO_CAN[cmd] = set()
+                self.sms_config[cmd + '_aliases'] = []
+            self.who_can[cmd] = set()
 
         # Groups / Permissions
-        self._SMS_CONFIG['groups'] = _as_list(self._SMS_CONFIG['groups'])
-        self._SMS_CONFIG['throttled_groups'] = dict()
-        for group in self._SMS_CONFIG['groups']:
+        self.sms_config['groups'] = _as_list(self.sms_config['groups'])
+        self.sms_config['throttled_groups'] = dict()
+        for group in self.sms_config['groups']:
             try:
-                self._SMS_CONFIG[group + '_users'] = _as_list(self._SMS_CONFIG[group + '_users'])
+                self.sms_config[group + '_users'] = _as_list(self.sms_config[group + '_users'])
             except:
-                self._SMS_CONFIG[group + '_users'] = []
+                self.sms_config[group + '_users'] = []
             try:
-                self._SMS_CONFIG[group + '_commands'] = _as_list(self._SMS_CONFIG[group + '_commands'])
+                self.sms_config[group + '_commands'] = _as_list(
+                    self.sms_config[group + '_commands'])
             except:
-                self._SMS_CONFIG[group + '_commands'] = []
-            for cmd in self._SMS_CONFIG[group + '_commands']:
-                for user in self._SMS_CONFIG[group + '_users']:
-                    self._WHO_CAN[cmd].add(user)
+                self.sms_config[group + '_commands'] = []
+            for cmd in self.sms_config[group + '_commands']:
+                for user in self.sms_config[group + '_users']:
+                    self.who_can[cmd].add(user)
 
             # Throttle
             try:
-                throttled_group_definitions = _as_list(self._SMS_CONFIG[group + '_throttle'])
+                throttled_group_definitions = _as_list(self.sms_config[group + '_throttle'])
                 throttled_group = dict()
                 for definition in throttled_group_definitions:
                     definition = definition.split(':')
                     if len(definition) != 2:
                         warnings.warn(group + "_throttle definitions should be in the form "
-                                    + "[command]:<limit> - " + ':'.join(definition))
+                                      + "[command]:<limit> - " + ':'.join(definition))
                         continue
                     throttle_command = definition[0]
                     throttle_limit = int(definition[1])
                     throttled_group[throttle_command] = throttle_limit
-                self._SMS_CONFIG['throttled_groups'][group] = throttled_group
+                self.sms_config['throttled_groups'][group] = throttled_group
             except:
                 warnings.warn("Throttle definition either does not exist or is configured "
-                            "incorrectly for group: " + group)
+                              "incorrectly for group: " + group)
 
         # Blacklist
-        self._SMS_CONFIG['blacklist'] = _as_list(self._SMS_CONFIG['blacklist'])
-
+        self.sms_config['blacklist'] = _as_list(self.sms_config['blacklist'])
 
     def songs(self, playlist_file=None):
         """
@@ -153,13 +155,13 @@ class Configuration(object):
                     song = song.strip().split('\t')
                     if not 2 <= len(song) <= 4:
                         logging.warn('Invalid playlist enrty.  Each line should be in the form: '
-                                    '<song name><tab><path to song>')
+                                     '<song name><tab><path to song>')
                         continue
                     playlist.append(song)
                 fcntl.lockf(playlist_fp, fcntl.LOCK_UN)
-            self._SONG_LIST = playlist
+            self.song_list = playlist
 
-        return self._SONG_LIST
+        return self.song_list
 
     def update_songs(self, playlist_file, playlist):
         """
@@ -173,7 +175,7 @@ class Configuration(object):
             for song in playlist:
                 playlist_fp.write('\t'.join(song) + "\r\n")
             fcntl.lockf(playlist_fp, fcntl.LOCK_UN)
-        self._SONG_LIST = playlist
+        self.song_list = playlist
 
     ##############################
     # Application State Utilities
@@ -198,7 +200,7 @@ class Configuration(object):
         """
         try:
             return self.STATE.get(self.STATE_SECTION, name)
-        except:
+        except ConfigParser.Error:
             return default
 
     def update_state(self, name, value):
@@ -228,10 +230,10 @@ class Configuration(object):
         :param user: string, user in user list
         :param cmd: string command in command list
         """
-        blacklisted = user in self._SMS_CONFIG['blacklist']
-        return not blacklisted and (user in self._WHO_CAN['all']
-                                    or 'all' in self._WHO_CAN[cmd]
-                                    or user in self._WHO_CAN[cmd])
+        blacklisted = user in self.sms_config['blacklist']
+        return not blacklisted and (user in self.who_can['all']
+                                    or 'all' in self.who_can[cmd]
+                                    or user in self.who_can[cmd])
 
     def is_throttle_exceeded(self, cmd, user):
         """
@@ -248,11 +250,12 @@ class Configuration(object):
 
         # Analyze throttle timing
         current_time_stamp = datetime.datetime.now()
-        throttle_time_limit = self._SMS_CONFIG['throttle_time_limit_seconds']
+        throttle_time_limit = self.sms_config['throttle_time_limit_seconds']
         throttle_start_time = datetime.datetime.strptime(
             throttle_state['throttle_timestamp_start'], '%Y-%m-%d %H:%M:%S.%f') \
             if "throttle_timestamp_start" in throttle_state else current_time_stamp
-        throttle_stop_time = throttle_start_time + datetime.timedelta(seconds=int(throttle_time_limit))
+        throttle_stop_time = \
+            throttle_start_time + datetime.timedelta(seconds=int(throttle_time_limit))
 
         # Compare times and see if we need to reset the throttle STATE
         if (current_time_stamp == throttle_start_time) or (throttle_stop_time < current_time_stamp):
@@ -268,15 +271,15 @@ class Configuration(object):
 
         # Check to see what group belongs to starting with the first group declared
         throttled_group = None
-        for group in self._SMS_CONFIG['groups']:
-            user_list = self._SMS_CONFIG[group + "_users"]
+        for group in self.sms_config['groups']:
+            user_list = self.sms_config[group + "_users"]
             if user in user_list:
                 # The user belongs to this group, check if there
                 # are any throttle definitions
-                if group in self._SMS_CONFIG['throttled_groups']:
+                if group in self.sms_config['throttled_groups']:
                     # The group has throttle commands defined,
                     # now check if the command is defined
-                    throttled_commands = self._SMS_CONFIG['throttled_groups'][group]
+                    throttled_commands = self.sms_config['throttled_groups'][group]
 
                     # Check if all command exists
                     if "all" in throttled_commands:
@@ -333,4 +336,3 @@ class Configuration(object):
         self.update_state('throttle', throttle_state)
 
         return process_command_flag
-

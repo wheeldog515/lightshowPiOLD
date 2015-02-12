@@ -30,7 +30,6 @@ need to define all commands in this file).
 import logging
 import re
 import subprocess
-import sys
 
 
 # The base command class. The class keeps track of all commands instantiated, so to install a new
@@ -128,7 +127,7 @@ def cmd_help(*args):
     help_msg = "Commands:\n"
     for cmd in _CMD_NAMES:
         if cm.has_permission(user, cmd):
-            cmd_description = cm._SMS_CONFIG[cmd + '_description']
+            cmd_description = cm.sms_config[cmd + '_description']
             if cmd_description:
                 help_msg += cmd_description + "\n"
     return help_msg
@@ -194,7 +193,7 @@ def cmd_volume(*args):
             return 'volume must be between 0 and 100'
         sanitized_cmd = str(vol)
     else:
-        return cm._SMS_CONFIG['volume_description']
+        return cm.sms_config['volume_description']
 
     # Execute the sanitized command and handle result
     volscript = cm.HOME_DIR + '/bin/vol'
@@ -227,12 +226,13 @@ def cmd_vote(*args):
             return 'Thank you for requesting "' + song[0] \
                    + '", we\'ll notify you when it starts!'
     else:
-        return cm._SMS_CONFIG['unknown_command_response']
+        return cm.sms_config['unknown_command_response']
+
 
 def setup(config):
     global cm, _CONFIG, _CMD_NAMES
     cm = config
-    _CONFIG = cm._SMS_CONFIG
+    _CONFIG = cm.sms_config
     _CMD_NAMES = _CONFIG['commands']
     
     Command('help', cmd_help)

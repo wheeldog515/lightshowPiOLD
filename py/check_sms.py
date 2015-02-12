@@ -53,7 +53,15 @@ import commands
 #
 
 VOICE = Voice()
-VOICE.login()
+
+logged_in = False
+while not logged_in:
+    try:
+        VOICE.login()
+        logged_in = True
+        pass
+    except Voice.LoginError:
+        time.sleep(5)
 
 
 def extract_sms(html_sms):
@@ -98,70 +106,67 @@ def main():
     Process sms messages
     """
     while True:
-        try:
-            # Load playlist from file, notifying users of any of their requests that have now played
-            logging.info('loading playlist ' + args.playlist)
-            playlist = cm.songs(args.playlist)
-            songs = []
-            for song in playlist:
-                #logging.debug(song)
-                if len(song) == 2:
-                    song.append(set())
-                elif len(song) >= 3:
-                    # Votes for the song are stored in the 3rd column
-                    song[2] = set(song[2].split(','))
+        # Load playlist from file, notifying users of any of their requests that have now played
+        logging.info('loading playlist ' + args.playlist)
+        playlist = cm.songs(args.playlist)
+        songs = []
+        for song in playlist:
+            #logging.debug(song)
+            if len(song) == 2:
+                song.append(set())
+            elif len(song) >= 3:
+                # Votes for the song are stored in the 3rd column
+                song[2] = set(song[2].split(','))
 
-                    # Notification of a song being played is stored in the 4th column
-                    if len(song) == 4:
-                        # Send an sms message to each requesting user that their song is now playing
-                        for phone_number in song[2]:
-                            VOICE.send_sms(phone_number, '"' + song[0] + '" is playing!')
-                        del song[3]
-                        song[2] = set()
-                songs.append(song)
-            logging.info('loaded %d songs from playlist', len(songs))
-            #cm.set_songs(songs)
+                # Notification of a song being played is stored in the 4th column
+                if len(song) == 4:
+                    # Send an sms message to each requesting user that their song is now playing
+                    for phone_number in song[2]:
+                        VOICE.send_sms(phone_number, '"' + song[0] + '" is playing!')
+                    del song[3]
+                    song[2] = set()
+            songs.append(song)
+        logging.info('loaded %d songs from playlist', len(songs))
+        #cm.set_songs(songs)
 
-            # Parse and act on any new sms messages
-            messages = VOICE.sms().messages
-            for msg in extract_sms(VOICE.sms.html):
-                logging.debug(str(msg))
-                response = commands.execute(msg['text'], msg['from'])
-                if response:
-                    logging.info('Request: "' + msg['text'] + '" from ' + msg['from'])
-                    try:
-                        if isinstance(response, basestring):
-                            VOICE.send_sms(msg['from'], response)
-                        else:
-                            # Multiple parts, send them with a delay in hopes to avoid
-                            # them being received out of order by the recipient.
-                            for part in response:
-                                VOICE.send_sms(msg['from'], str(part))
-                                time.sleep(2)
-                    except:
-                        logging.warn('Error sending sms response (command still executed)',
-                                     exc_info=1)
-                    logging.info('Response: "' + str(response) + '"')
-                else:
-                    logging.info('Unknown request: "' + msg['text'] + '" from ' + msg['from'])
-                    VOICE.send_sms(msg['from'], unknown_command_response)
+        # Parse and act on any new sms messages
+        messages = VOICE.sms().messages
+        for msg in extract_sms(VOICE.sms.html):
+            logging.debug(str(msg))
+            response = commands.execute(msg['text'], msg['from'])
+            if response:
+                logging.info('Request: "' + msg['text'] + '" from ' + msg['from'])
+                try:
+                    if isinstance(response, basestring):
+                        VOICE.send_sms(msg['from'], response)
+                    else:
+                        # Multiple parts, send them with a delay in hopes to avoid
+                        # them being received out of order by the recipient.
+                        for part in response:
+                            VOICE.send_sms(msg['from'], str(part))
+                            time.sleep(2)
+                except:
+                    logging.warn('Error sending sms response (command still executed)',
+                                 exc_info=1)
+                logging.info('Response: "' + str(response) + '"')
+            else:
+                logging.info('Unknown request: "' + msg['text'] + '" from ' + msg['from'])
+                VOICE.send_sms(msg['from'], unknown_command_response)
 
-            # Update playlist with latest votes
-            for song in songs:
-                if len(song[2]) > 0:
-                    song[2] = ",".join(song[2])
-                else:
-                    del song[2]
+        # Update playlist with latest votes
+        for song in songs:
+            if len(song[2]) > 0:
+                song[2] = ",".join(song[2])
+            else:
+                del song[2]
 
-            cm.update_songs(args.playlist, songs)
+        cm.update_songs(args.playlist, songs)
 
-            # Delete all messages now that we've processed them
-            for msg in messages:
-                msg.delete(1)
+        # Delete all messages now that we've processed them
+        for msg in messages:
+            msg.delete(1)
 
-            time.sleep(15)
-        except LoginError:
-            pass
+        time.sleep(15)
 
 if __name__ == "__main__":
     # Log everything to debug log file
@@ -197,7 +202,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # SMS Configurations
-    _CONFIG = cm._SMS_CONFIG
+    _CONFIG = cm.sms_config
 
     # First check to make sure SMS is enabled
     if not _CONFIG['enable']:

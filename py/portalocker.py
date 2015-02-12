@@ -140,8 +140,11 @@ if os.name == 'nt':
         else:
             return False
             
-elif os.name =='posix':
-    def lock(file, flags):
+elif os.name == 'posix':
+    def lockf(file, flags):
+        if flags == LOCK_UN:
+            return unlock(file)
+
         if fcntl.flock(file.fileno(), flags) == 0:
             return True
         else:
@@ -153,18 +156,17 @@ elif os.name =='posix':
         else:
             return False
 
-if __name__ == '__main__':
-    from time import time, strftime, localtime
-    import sys
-
-    log = open('log.txt', "a+")
-    lock(log, LOCK_EX)
-
-    timestamp = strftime("%m/%d/%Y %H:%M:%S\n", localtime(time()))
-    log.write( timestamp )
-
-    print "Wrote lines. Hit enter to release lock."
-    dummy = sys.stdin.readline()
-
-    log.close()
-
+# if __name__ == '__main__':
+#     from time import time, strftime, localtime
+#     import sys
+#
+#     log = open('log.txt', "a+")
+#     lockf(log, LOCK_EX)
+#
+#     timestamp = strftime("%m/%d/%Y %H:%M:%S\n", localtime(time()))
+#     log.write(timestamp)
+#
+#     print "Wrote lines. Hit enter to release lock."
+#     dummy = sys.stdin.readline()
+#
+#     log.close()

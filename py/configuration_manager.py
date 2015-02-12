@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+# !/usr/bin/env python
 #
 # Licensed under the BSD license.  See full license in LICENSE file.
 # http://www.lightshowpi.com/
@@ -16,6 +16,7 @@ manage these configuration files.
 """
 
 import ConfigParser
+
 try:
     import fcntl
 except ImportError:
@@ -26,7 +27,7 @@ import logging
 import os
 import platform
 import sys
-import warnings
+#import warnings
 from collections import defaultdict
 
 # The home directory and configuration directory for the application.
@@ -34,26 +35,25 @@ HOME_DIR = os.getenv("SYNCHRONIZED_LIGHTS_HOME")
 if not HOME_DIR:
     if not "raspberrypi" in platform.uname():
         d = os.path.dirname(os.path.abspath(__file__))
-        
+
         x = os.path.split(os.path.abspath(__file__))[0]
-        
+
         p = x.split(os.sep)
         p = p[:-1]
         p1 = os.sep.join(p)
         HOME_DIR = p1
-       
+
         #sys.exit(0)
     else:
         print("Need to setup SYNCHRONIZED_LIGHTS_HOME environment variable, "
-            "see readme")
+              "see readme")
         sys.exit()
-    
+
 CONFIG_DIR = os.path.join(HOME_DIR, 'config')
 LOG_DIR = os.path.join(HOME_DIR, 'logs')
 
 
 class Configuration(object):
-
     def __init__(self):
         self.HOME_DIR = HOME_DIR
         self.CONFIG_DIR = os.path.join(HOME_DIR, 'config')
@@ -62,11 +62,11 @@ class Configuration(object):
         self.network_config = dict()
         self.lightshow_config = dict()
         self.audio_config = dict()
-        
+        self._SONG_LIST = None
         self.CONFIG = ConfigParser.RawConfigParser(allow_no_value=True)
 
         self.load_configs()
-        
+
         # Load application state configuration file from CONFIG directory.
         self.STATE = ConfigParser.RawConfigParser()
         self.STATE_SECTION = 'do_not_modify'
@@ -91,15 +91,14 @@ class Configuration(object):
         self.network_config = dict()
         self.lightshow_config = dict()
         self.audio_config = dict()
-        
+
         default = os.path.join(self.CONFIG_DIR, 'defaults.cfg')
         overrides = os.path.join(self.CONFIG_DIR, 'overrides.cfg')
-        
-        
+
         self.CONFIG = ConfigParser.RawConfigParser(allow_no_value=True)
         self.CONFIG.readfp(open(default))
         self.CONFIG.read([overrides, '/home/pi/.lights.cfg',
-                    os.path.expanduser('~/.lights.cfg')])
+                          os.path.expanduser('~/.lights.cfg')])
         if per_song:
             self.CONFIG.read([per_song])
 
@@ -107,7 +106,7 @@ class Configuration(object):
         self.network()
         self.lightshow()
         self.audio_processing()
-    
+
     def hardware(self):
         """
         Retrieves the hardware configuration
@@ -120,25 +119,28 @@ class Configuration(object):
         self.hardware_config['gpio_pins'] = \
             [int(pin) for pin in self.hardware_config['gpio_pins'].split(',')]
 
-        self.hardware_config['active_low_mode'] = self.CONFIG.getboolean('hardware', 'active_low_mode')
+        self.hardware_config['active_low_mode'] = self.CONFIG.getboolean('hardware',
+                                                                         'active_low_mode')
         self.hardware_config['gpiolen'] = len(self.hardware_config['gpio_pins'])
 
         self.hardware_config['pin_modes'] = self.hardware_config['pin_modes'].split(',')
         if len(self.hardware_config['pin_modes']) == 1:
             self.hardware_config['pin_modes'] = \
-                [self.hardware_config['pin_modes'][0] for _ in range(self.hardware_config['gpiolen'])]
+                [self.hardware_config['pin_modes'][0] for _ in
+                 range(self.hardware_config['gpiolen'])]
         else:
             if len(self.hardware_config['pin_modes']) < self.hardware_config['gpiolen']:
-                length_to_extend = self.hardware_config['gpiolen'] - len(self.hardware_config['pin_modes'])
+                length_to_extend = self.hardware_config['gpiolen'] - len(
+                    self.hardware_config['pin_modes'])
                 self.hardware_config['pin_modes'].extend(['onoff' for _ in range(length_to_extend)])
                 logging.warn("not enough pins specified, extending list")
             elif len(self.hardware_config['pin_modes']) > self.hardware_config['gpiolen']:
                 self.hardware_config['pin_modes'] = \
                     self.hardware_config['pin_modes'][:self.hardware_config['gpiolen']]
                 logging.warn("to many pins, truncing list")
-        
+
         self.hardware_config['pwm_range'] = int(self.hardware_config['pwm_range'])
-        
+
         # Devices
         devices = dict()
 
@@ -148,7 +150,7 @@ class Configuration(object):
             logging.error("devices not defined or not in JSON format." + str(error))
 
         self.hardware_config['devices'] = devices
-            
+
     def network(self):
         """
         Retrieves the network configuration
@@ -158,14 +160,14 @@ class Configuration(object):
         for key, value in self.CONFIG.items('network'):
             self.network_config[key] = value
         self.network_config['port'] = self.CONFIG.getint('network', 'port')
-        
+
         if len(self.network_config['channels']) == 0:
             channels = [_ for _ in range(self.hardware_config['gpiolen'])]
         else:
             channels = [str.strip(item) for item in self.network_config['channels'].split(",")]
 
         temp = defaultdict(list)
-            
+
         for channel in range(len(channels)):
             temp[int(channels[channel])].append(int(channel))
         temp = dict(temp)
@@ -180,30 +182,32 @@ class Configuration(object):
         """
         for key, value in self.CONFIG.items('lightshow'):
             self.lightshow_config[key] = value
-            
-        self.lightshow_config['audio_in_channels'] = self.CONFIG.getint('lightshow', 'audio_in_channels')
-        
+
+        self.lightshow_config['audio_in_channels'] = self.CONFIG.getint('lightshow',
+                                                                        'audio_in_channels')
+
         self.lightshow_config['audio_in_sample_rate'] = \
             self.CONFIG.getint('lightshow', 'audio_in_sample_rate')
-        
+
         self.lightshow_config['always_on_channels'] = \
             [int(channel) for channel in self.lightshow_config['always_on_channels'].split(',')]
-        
+
         self.lightshow_config['always_off_channels'] = \
             [int(channel) for channel in self.lightshow_config['always_off_channels'].split(',')]
-        
+
         self.lightshow_config['invert_channels'] = \
             [int(channel) for channel in self.lightshow_config['invert_channels'].split(',')]
-        
+
         self.lightshow_config['playlist_path'] = \
             self.lightshow_config['playlist_path'].replace('$SYNCHRONIZED_LIGHTS_HOME', HOME_DIR)
-        
+
         self.lightshow_config['randomize_playlist'] = \
             self.CONFIG.getboolean('lightshow', 'randomize_playlist')
 
         # setup up preshow
         preshow = None
-        if self.lightshow_config['preshow_configuration'] and not self.lightshow_config['preshow_script']:
+        if self.lightshow_config['preshow_configuration'] and not self.lightshow_config[
+                'preshow_script']:
             try:
                 preshow = json.loads(self.lightshow_config['preshow_configuration'])
             except (ValueError, TypeError) as e:
@@ -216,7 +220,8 @@ class Configuration(object):
 
         # setup postshow
         postshow = None
-        if self.lightshow_config['postshow_configuration'] and not self.lightshow_config['postshow_script']:
+        if self.lightshow_config['postshow_configuration'] and not self.lightshow_config[
+                'postshow_script']:
             try:
                 postshow = json.loads(self.lightshow_config['postshow_configuration'])
             except (ValueError, TypeError) as e:
@@ -247,12 +252,13 @@ class Configuration(object):
 
         if self.audio_config['custom_channel_frequencies']:
             self.audio_config['custom_channel_frequencies'] = \
-                [int(channel) for channel in self.audio_config['custom_channel_frequencies'].split(',')]
+                [int(channel) for channel in
+                 self.audio_config['custom_channel_frequencies'].split(',')]
         else:
             self.audio_config['custom_channel_frequencies'] = 0
 
         self.audio_config['fm'] = self.CONFIG.getboolean('audio_processing', 'fm')
-        
+
         self.audio_config['chunk_size'] = int(self.audio_config['chunk_size'])
         if self.audio_config['chunk_size'] % 8 != 0:
             self.audio_config['chunk_size'] = 2048
@@ -264,7 +270,7 @@ class Configuration(object):
         
         :param song: string, path and filename of per song config
         """
-        load_configs(song)
+        self.load_configs(song)
 
     def songs(self, playlist_file=None):
         """
@@ -281,12 +287,12 @@ class Configuration(object):
                     song = song.strip().split('\t')
                     if not 2 <= len(song) <= 4:
                         logging.warn('Invalid playlist enrty.  Each line should be in the form: '
-                                    '<song name><tab><path to song>')
+                                     '<song name><tab><path to song>')
                         continue
                     song[1] = song[1].replace('$SYNCHRONIZED_LIGHTS_HOME', HOME_DIR)
                     playlist.append(song)
                 fcntl.lockf(playlist_fp, fcntl.LOCK_UN)
-            
+
             self._SONG_LIST = playlist
 
         return self._SONG_LIST
@@ -353,7 +359,7 @@ class Configuration(object):
         except ConfigParser.DuplicateSectionError:
             # Ok, it's already there
             pass
-        
+
         self.STATE.set(self.STATE_SECTION, name, value)
         with open(self.STATE_FILENAME, 'wb') as state_fp:
             fcntl.lockf(state_fp, fcntl.LOCK_EX)

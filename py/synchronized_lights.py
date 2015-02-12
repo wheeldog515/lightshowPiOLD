@@ -64,7 +64,8 @@ import atexit
 import cPickle
 import logging
 import os
-#import psutil
+import platform
+# import psutil
 import random
 import socket
 import subprocess
@@ -76,14 +77,66 @@ try:
     alsa_used = True
 except ImportError:
     import pyaudio
+
     alsa_used = False
-    
+
 import decoder
 import fft
 import hardware_manager
 import numpy
 
 from prepostshow import PrePostShow
+
+
+class SoundDevice(object):
+    def __init__(self, ls):
+        self.usefm = ls.usefm
+        self.fm_frequency = ls.fm_frequency
+        self.music_pipe_r, self.music_pipe_w = os.pipe()
+        self.audio_in = ls.mode == 'audio-in'
+        self.audio_in_card = ls.lightshow_config['audio_in_card']
+        self.pifm = ls.HOME_DIR + "/bin/pifm"
+        self.fm_process = None
+        self.audio_device = None
+        self.pyaudio_audio_device = None
+
+    def setup(self):
+        """
+        Setup the sound device
+        
+        Setup the sound device for use in the show
+        PiFm
+        onboard sound
+        or a usb sound card        
+        """
+        if self.usefm:
+            self.music_pipe_r, self.music_pipe_w = os.pipe()
+            logging.info("Sending output as fm transmission")
+
+            with open(os.devnull, "w") as dev_null:
+                # start pifm as a separate process 
+                # play_stereo is always True as coded, Should it be changed to
+                # an option in the config file?
+                self.fm_process = subprocess.Popen(["sudo",
+                                                    self.pifm,
+                                                    "-",
+                                                    str(self.fm_frequency),
+                                                    "44100",
+                                                    "stereo"],
+                                                   stdin=self.music_pipe_r,
+                                                   stdout=dev_null)
+        elif self.audio_in:
+            # Open the input stream from default input device
+            self.audio_device = \
+                alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, self.audio_in_card)
+            self.audio_device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+        else:
+            if alsa_used:
+                self.audio_device = alsaaudio.PCM(alsaaudio.PCM_PLAYBACK, alsaaudio.PCM_NORMAL)
+                self.audio_device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+            else:
+                self.pyaudio_audio_device = pyaudio.PyAudio()
+
 
 class Lightshow(hardware_manager.Hardware):
     """
@@ -99,23 +152,40 @@ class Lightshow(hardware_manager.Hardware):
         self.mode = self.lightshow_config['mode']
         self.playlist_path = self.lightshow_config['playlist_path']
         self.randomize_playlist = self.lightshow_config['randomize_playlist']
+        self.audio_in_card = self.lightshow_config['audio_in_card']
 
         self.chunk_size = self.audio_config['chunk_size']
 
         self.networking = self.network_config['networking']
         self.port = self.network_config['port']
-        
-        self.not_pwm = [not pin if pin else not pin for pin in self.is_pin_pwm]
-        
-        self.usefm = self.audio_config['fm']
 
+        self.not_pwm = [not pin if pin else not pin for pin in self.is_pin_pwm]
+
+        if "raspberrypi" in platform.uname():
+            self.usefm = self.audio_config['fm']
+        else:
+            self.usefm = False
+
+        self.music_file = None
+        self.sample_rate = None
+        self.num_channels = None
+        self.cache_filename = None
+        self.cache_found = None
+        self.cache_matrix = None
+        self.mean = None
+        self.std = None
+        self.stop = False
+
+        self.pyaudio_audio_device = None
+        self.fm_frequency = self.audio_config['frequency']
+        self.music_pipe_r, self.music_pipe_w = os.pipe()
         self.song_filename = None
         self.audio_device = None
         self.fm_process = None
         self.stream = None
         self.stop_the_show = False
         self.__initialized = False
-        
+
         self.sound_device()
 
     def sound_device(self):
@@ -128,8 +198,6 @@ class Lightshow(hardware_manager.Hardware):
         or a usb sound card        
         """
         if self.usefm:
-            self.fm_frequency = self.audio_config['frequency']
-            self.music_pipe_r, self.music_pipe_w = os.pipe()
             logging.info("Sending output as fm transmission")
 
             with open(os.devnull, "w") as dev_null:
@@ -146,7 +214,8 @@ class Lightshow(hardware_manager.Hardware):
                                                    stdout=dev_null)
         elif self.mode == 'audio-in':
             # Open the input stream from default input device
-            self.audio_device = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, self.lightshow_config['audio_in_card'])
+            self.audio_device = \
+                alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL, self.audio_in_card)
             self.audio_device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
         else:
             if alsa_used:
@@ -154,6 +223,7 @@ class Lightshow(hardware_manager.Hardware):
                 self.audio_device.setformat(alsaaudio.PCM_FORMAT_S16_LE)
             else:
                 self.pyaudio_audio_device = pyaudio.PyAudio()
+
     def update_lights(self, matrix, mean, std):
         """
         Update the state of all the lights
@@ -194,34 +264,34 @@ class Lightshow(hardware_manager.Hardware):
         # How many channels do we need to calculate the frequency for
         if custom_channel_mapping != 0 and len(custom_channel_mapping) == self.gpiolen:
             logging.debug("Custom Channel Mapping is being used: %s", str(custom_channel_mapping))
-            channel_length = max(custom_channel_mapping)
+            channel_len = max(custom_channel_mapping)
         else:
             logging.debug("Normal Channel Mapping is being used.")
-            channel_length = self.gpiolen
+            channel_len = self.gpiolen
 
-        logging.debug("Calculating frequencies for %d channels.", channel_length)
+        logging.debug("Calculating frequencies for %d channels.", channel_len)
         octaves = (numpy.log(max_frequency / min_frequency)) / numpy.log(2)
         logging.debug("octaves in selected frequency range ... %s", octaves)
-        octaves_per_channel = octaves / channel_length
+        octaves_per_channel = octaves / channel_len
         frequency_limits = []
         frequency_store = []
 
         frequency_limits.append(min_frequency)
 
-        if custom_channel_frequencies != 0 and (len(custom_channel_frequencies) >= channel_length + 1):
+        if custom_channel_frequencies != 0 and (len(custom_channel_frequencies) >= channel_len + 1):
             logging.debug("Custom channel frequencies are being used")
             frequency_limits = custom_channel_frequencies
         else:
             logging.debug("Custom channel frequencies are not being used")
             for pin in range(1, self.gpiolen + 1):
-                #frequency_limits.append(
-                    #frequency_limits[-1] * 2 ** octaves_per_channel)
+                # frequency_limits.append(
+                #frequency_limits[-1] * 2 ** octaves_per_channel)
                 frequency_limits.append(frequency_limits[-1]
                                         * 10 ** (3 / (10 * (1 / octaves_per_channel))))
-        for pin in range(0, channel_length):
+        for pin in range(0, channel_len):
             frequency_store.append((frequency_limits[pin], frequency_limits[pin + 1]))
             logging.debug("channel %d is %6.2f to %6.2f ", pin, frequency_limits[pin],
-                        frequency_limits[pin + 1])
+                          frequency_limits[pin + 1])
 
         # we have the frequencies now lets map them if custom mapping is defined
         if custom_channel_mapping != 0 and len(custom_channel_mapping) == self.gpiolen:
@@ -232,29 +302,29 @@ class Lightshow(hardware_manager.Hardware):
                 mapped_frequency_set_low = mapped_frequency_set[0]
                 mapped_frequency_set_high = mapped_frequency_set[1]
                 logging.debug("mapped channel: " + str(mapped_channel) + " will hold LOW: "
-                            + str(mapped_frequency_set_low) + " HIGH: "
-                            + str(mapped_frequency_set_high))
+                              + str(mapped_frequency_set_low) + " HIGH: "
+                              + str(mapped_frequency_set_high))
                 frequency_map.append(mapped_frequency_set)
             return frequency_map
         else:
             return frequency_store
-            
+
     def audio_in(self):
         """Control the lightshow from audio coming in from a USB audio card"""
         sample_rate = self.lightshow_config['audio_in_sample_rate']
         input_channels = self.lightshow_config['audio_in_channels']
-        
+
         half_gpiolen = self.gpiolen / 2
-        
+
         self.audio_device.setchannels(input_channels)
         self.audio_device.setrate(sample_rate)
-        self.audio_device.setperiodsize(chunk_size)
-        
+        self.audio_device.setperiodsize(self.chunk_size)
+
         if not self.__initialized:
             self.initialize()
             self.__initialized = True
 
-        frequency_limits = calculate_channel_frequency()
+        frequency_limits = self.calculate_channel_frequency()
 
         # Start with these as our initial guesses - will calculate a rolling mean / std 
         # as we get input data.
@@ -262,10 +332,10 @@ class Lightshow(hardware_manager.Hardware):
         std = [0.5 for _ in range(self.gpiolen)]
         recent_samples = numpy.empty((250, self.gpiolen))
         num_samples = 0
-        
+
         logging.debug("Running in audio-in mode - will run until Ctrl+C is pressed")
         print "Running in audio-in mode, use Ctrl+C to stop"
-        
+
         # Listen on the audio input device until CTRL-C is pressed
         try:
             while True:
@@ -274,11 +344,11 @@ class Lightshow(hardware_manager.Hardware):
                 if length:
                     try:
                         matrix = fft.calculate_levels(data,
-                                                    chunk_size,
-                                                    sample_rate,
-                                                    frequency_limits,
-                                                    self.gpiolen,
-                                                    input_channels)
+                                                      self.chunk_size,
+                                                      sample_rate,
+                                                      frequency_limits,
+                                                      self.gpiolen,
+                                                      input_channels)
                         if not numpy.isfinite(numpy.sum(matrix)):
                             # Bad data --- skip it
                             continue
@@ -295,12 +365,14 @@ class Lightshow(hardware_manager.Hardware):
 
                     # Keep track of the last N samples to compute a running std / mean
                     #
-                    # TODO(todd): Look into using this algorithm to compute this on a per sample basis:
+                    # TODO(todd): Look into using this algorithm to compute
+                    # this on a per sample basis:
                     # http://www.johndcook.com/blog/standard_deviation/                
                     if num_samples >= 250:
                         for i in range(0, self.gpiolen):
-                            mean[i] = numpy.mean([item for item in recent_samples[:, i] if item > 0])
-                            std[i] = numpy.std([item for item in recent_samples[:, i] if item > 0])
+                            mean[i] = numpy.mean(
+                                [itm for itm in recent_samples[:, i] if itm > 0])
+                            std[i] = numpy.std([itm for itm in recent_samples[:, i] if itm > 0])
 
                         # Count how many channels are below 10, 
                         # if more than 1/2, assume noise (no connection)
@@ -335,17 +407,17 @@ class Lightshow(hardware_manager.Hardware):
             channels = self.network_config['channels']
             self.stream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.stream.bind(('', self.port))
-            
+
             print "listening on port: " + str(self.port)
-            
+
             logging.info("client channels mapped as\n" + str(channels))
             logging.info("listening on port: " + str(self.port))
         except socket.error, msg:
-            logging.error('Failed create socket or bind. Error code: ' + 
+            logging.error('Failed create socket or bind. Error code: ' +
                           str(msg[0]) + ' : ' + msg[1])
             self.stream.close()
             sys.exit(0)
-            
+
         print "press CTRL<C> to end"
         self.initialize()
         print
@@ -353,10 +425,12 @@ class Lightshow(hardware_manager.Hardware):
         try:
             while True:
                 temp = False
-                data = None
-                
+                #data = None
+                matrix = None
+                mean = None
+                std = None
                 try:
-                    sys.stdout.write("\rReceiving data for: %s" % (song))
+                    sys.stdout.write("\rReceiving data for: %s" % song)
                     sys.stdout.flush()
                     data, address = self.stream.recvfrom(4096)
                     data = cPickle.loads(data)
@@ -370,30 +444,30 @@ class Lightshow(hardware_manager.Hardware):
                         brightness = float(data[1])
                         temp = True
                     elif len(data) == 3:
-                            matrix = data[0]
-                            mean = data[1]
-                            std = data[2]
-                            pins = [_ for _ in range(self.gpiolen)]
+                        matrix = data[0]
+                        mean = data[1]
+                        std = data[2]
+                        pins = [_ for _ in range(self.gpiolen)]
                     else:
                         continue
                 except (IndexError, cPickle.PickleError):
                     matrix = std = mean = [0 for _ in range(self.gpiolen)]
-                
+
                 if not isinstance(pins, list):
                     pins = [_ for _ in range(self.gpiolen)]
                     matrix = std = mean = [0 for _ in range(self.gpiolen)]
-                
+
                 for pin in pins:
                     if not temp:
                         brightness = (matrix[pin] - mean[pin] + 0.5 * std[pin]) / 1.25 * std[pin]
                         brightness = max(0.0, min(1.0, brightness))
-                        
+
                     if pin in channels.keys():
                         if channels[pin] < 0:
                             continue
                         for channel in channels[pin]:
                             if self.not_pwm[channel]:
-                                self.turn_on_light(channel,True, float(brightness > 0.5))
+                                self.turn_on_light(channel, True, float(brightness > 0.5))
                             else:
                                 self.turn_on_light(channel, True, brightness)
         except KeyboardInterrupt:
@@ -486,7 +560,8 @@ class Lightshow(hardware_manager.Hardware):
             self.audio_device.setrate(self.sample_rate)
             self.audio_device.setperiodsize(self.chunk_size)
         else:
-            audio_format = self.pyaudio_audio_device.get_format_from_width(self.music_file.getsampwidth())
+            audio_format = self.pyaudio_audio_device.get_format_from_width(
+                self.music_file.getsampwidth())
             self.audio_device = self.pyaudio_audio_device.open(format=audio_format,
                                                                channels=self.num_channels,
                                                                rate=self.sample_rate,
@@ -495,7 +570,8 @@ class Lightshow(hardware_manager.Hardware):
         # Output a bit about what we're about to play to the logs
         self.song_filename = os.path.abspath(self.song_filename)
         logging.info(
-            "Playing: " + self.song_filename + " (" + str(self.music_file.getnframes() / self.sample_rate) + " sec)")
+            "Playing: " + self.song_filename + " (" + str(
+                self.music_file.getnframes() / self.sample_rate) + " sec)")
 
     def per_song(self):
         """
@@ -506,7 +582,7 @@ class Lightshow(hardware_manager.Hardware):
         per_song_config_filename = self.song_filename + ".cfg"
         if os.path.isfile(per_song_config_filename):
             logging.info("loading custom configuration for " + per_song_config_filename)
-            
+
             self.per_song_config(per_song_config_filename)
             self.load_config()
 
@@ -518,10 +594,10 @@ class Lightshow(hardware_manager.Hardware):
         # Cached data filename
         self.cache_found = False
         self.cache_filename = os.path.dirname(self.song_filename) + "/." + os.path.basename(
-                                            self.song_filename) + ".sync.npz"
+            self.song_filename) + ".sync.npz"
         # create empty array for the cache_matrix
         self.cache_matrix = list()
-        
+
         # The values 12 and 1.5 are good estimates for first time playing back 
         # (i.e. before we have the actual mean and standard deviations 
         # calculated for each channel).
@@ -535,13 +611,13 @@ class Lightshow(hardware_manager.Hardware):
             # get the current configuration to compare to
             # what is stored in the cached array
             show_configuration = numpy.array([[self.gpiolen],
-                                        [self.sample_rate],
-                                        [self.audio_config['min_frequency']],
-                                        [self.audio_config['max_frequency']],
-                                        [self.audio_config['custom_channel_mapping']],
-                                        [self.audio_config['custom_channel_frequencies']],
-                                        [self.chunk_size],
-                                        [self.num_channels]], dtype=object)
+                                              [self.sample_rate],
+                                              [self.audio_config['min_frequency']],
+                                              [self.audio_config['max_frequency']],
+                                              [self.audio_config['custom_channel_mapping']],
+                                              [self.audio_config['custom_channel_frequencies']],
+                                              [self.chunk_size],
+                                              [self.num_channels]], dtype=object)
 
             # cached hardware configuration from sync file
             cached_configuration = cache_arrays["cached_configuration"]
@@ -557,7 +633,7 @@ class Lightshow(hardware_manager.Hardware):
                 logging.debug("std: " + str(self.std) + ", mean: " + str(self.mean))
             else:
                 logging.warn('Cached configuration does not match current configuration.  '
-                            'Generating new cache file with current show configuration')
+                             'Generating new cache file with current show configuration')
         except IOError:
             logging.warn("Cached sync data song_filename not found: '"
                          + self.cache_filename + "'.  One will be generated.")
@@ -578,7 +654,7 @@ class Lightshow(hardware_manager.Hardware):
         cache_len = len(self.cache_matrix)
 
         data = self.music_file.readframes(self.chunk_size)
-        
+
         while data != '' and not play_now:
             if self.fm_process and not args.createcache:
                 os.write(self.music_pipe_w, data)
@@ -596,11 +672,12 @@ class Lightshow(hardware_manager.Hardware):
 
             if matrix is None:
                 # No cache - Compute FFT in this chunk, and cache results
-                matrix = fft.calculate_levels(data, self.chunk_size, self.sample_rate, frequency_limits, self.gpiolen)
+                matrix = fft.calculate_levels(data, self.chunk_size, self.sample_rate,
+                                              frequency_limits, self.gpiolen)
 
                 # Add the matrix to the end of the cache 
                 self.cache_matrix.append(matrix)
-                
+
             # Load new application state in case we've been interrupted and
             # update the lights
             if not args.createcache:
@@ -610,67 +687,68 @@ class Lightshow(hardware_manager.Hardware):
                 for pin in range(self.gpiolen):
                     # Calculate output pwm, where off is at some portion of the std below
                     # the mean and full on is at some portion of the std above the mean.
-                    brightness = (matrix[pin] - self.mean[pin] + 0.5 * self.std[pin]) / 1.25 * self.std[pin]
+                    brightness = \
+                        (matrix[pin] - self.mean[pin] + 0.5 * self.std[pin]) / 1.25 * self.std[pin]
                     brightness = max(0.0, min(1.0, brightness))
                     if self.not_pwm[pin]:
                         # If pin is on / off mode we'll turn on at 1/2 brightness
                         self.turn_on_light(pin, True, float(brightness > 0.5))
                     else:
                         self.turn_on_light(pin, True, brightness)
-                
+
                 self.load_state()
                 play_now = int(self.get_state('play_now', 0))
             else:
                 if counter > total_frames:
                     percentage += 1
                     counter = 0
-        
+
                 counter += self.chunk_size
                 sys.stdout.write("\rGenerating sync file for :%s %d%%" % (song, percentage))
                 sys.stdout.flush()
-                
+
             # Read next chunk of data from music song_filename
             data = self.music_file.readframes(self.chunk_size)
             row += 1
-            
+
         # make sure lame ends
         self.music_file.close()
-        #for proc in psutil.process_iter():
-            #if proc.name() == "lame":
-                #proc.kill()
-        
+        # for proc in psutil.process_iter():
+        #if proc.name() == "lame":
+        #proc.kill()
+
     def save_matrix(self):
         """
         Save the data necessary for playback so that it will not need to
         be calculated again
         """
         cache_matrix = numpy.array(self.cache_matrix)
-        
+
         show_configuration = numpy.array([[self.gpiolen],
-                                    [self.sample_rate],
-                                    [self.audio_config['min_frequency']],
-                                    [self.audio_config['max_frequency']],
-                                    [self.audio_config['custom_channel_mapping']],
-                                    [self.audio_config['custom_channel_frequencies']],
-                                    [self.chunk_size],
-                                    [self.num_channels]], dtype=object)
+                                          [self.sample_rate],
+                                          [self.audio_config['min_frequency']],
+                                          [self.audio_config['max_frequency']],
+                                          [self.audio_config['custom_channel_mapping']],
+                                          [self.audio_config['custom_channel_frequencies']],
+                                          [self.chunk_size],
+                                          [self.num_channels]], dtype=object)
 
         # Compute the standard deviation and mean values for the cache
         mean = [0 for _ in range(self.gpiolen)]
         std = [0 for _ in range(self.gpiolen)]
         for i in range(self.gpiolen):
-            std[i] = numpy.std([item for item in cache_matrix[:, i] if item > 0])
-            mean[i] = numpy.mean([item for item in cache_matrix[:, i] if item > 0])
+            std[i] = numpy.std([indx for indx in cache_matrix[:, i] if indx > 0])
+            mean[i] = numpy.mean([indx for indx in cache_matrix[:, i] if indx > 0])
 
         # Save the cache
         numpy.savez(self.cache_filename,
-                cache_matrix=cache_matrix,
-                mean=mean,
-                std=std,
-                cached_configuration=show_configuration)
-        
+                    cache_matrix=cache_matrix,
+                    mean=mean,
+                    std=std,
+                    cached_configuration=show_configuration)
+
         logging.info("Cached sync data written to '." + self.cache_filename
-                    + "' [" + str(len(cache_matrix)) + " rows]")
+                     + "' [" + str(len(cache_matrix)) + " rows]")
 
     def create_cache(self, items):
         """
@@ -698,9 +776,9 @@ class Lightshow(hardware_manager.Hardware):
             self.cache_matrix = list()
             self.mean = [12.0 for _ in range(self.gpiolen)]
             self.std = [1.5 for _ in range(self.gpiolen)]
-            
+
             logging.info("Generating sync file for :" + song)
-            
+
             self.song_filename = song
             self.per_song()
 
@@ -711,12 +789,13 @@ class Lightshow(hardware_manager.Hardware):
 
             self.sample_rate = self.music_file.getframerate()
             self.num_channels = self.music_file.getnchannels()
-            
-            self.cache_filename = os.path.dirname(song) + "/." + os.path.basename(song) + ".sync.npz"
+
+            self.cache_filename = os.path.dirname(song) + "/." + os.path.basename(
+                song) + ".sync.npz"
             self.playback(song)
 
             self.save_matrix()
-            
+
             sys.stdout.write("\rSync file generated for  :%s %d%%" % (song, 100))
             sys.stdout.write("\n")
             sys.stdout.flush()
@@ -773,7 +852,7 @@ class Lightshow(hardware_manager.Hardware):
             self.read_cache()
 
         # send song file name to clients for logging
-        if self.networking == 'server':        
+        if self.networking == 'server':
             self.broadcast(self.song_filename)
 
         # Process audio song_filename and playback
@@ -790,20 +869,20 @@ class Lightshow(hardware_manager.Hardware):
         PrePostShow('postshow', self).execute()
 
 
-#@atexit.register
-def on_exit(lightshow):
+# @atexit.register
+def on_exit(ls):
     """
     Preform these actions on exit
-    """    
-    lightshow.unset_playing()
-    lightshow.clean_up()
-    
-    if lightshow.stream:
-        lightshow.stream.close()
-    
+    """
+    ls.unset_playing()
+    ls.clean_up()
+
+    if ls.stream:
+        ls.stream.close()
+
     # Cleanup the pifm process
-    if lightshow.usefm:
-        lightshow.fm_process.kill()
+    if ls.usefm:
+        ls.fm_process.kill()
 
 
 if __name__ == "__main__":
@@ -813,7 +892,7 @@ if __name__ == "__main__":
               'WARNING': logging.WARNING,
               'ERROR': logging.ERROR,
               'CRITICAL': logging.CRITICAL}
-    
+
     level = logging.INFO
     for item in sys.argv:
         if "log" in item.lower():
@@ -822,12 +901,13 @@ if __name__ == "__main__":
                 level = levels[sys.argv[idx + 1].upper()]
             elif "log" in sys.argv[idx]:
                 level = levels[sys.argv[idx].split('=')[-1].upper()]
-                
+
     # create default logger, level = INFO
-    logging.basicConfig(filename=hardware_manager.configuration_manager.LOG_DIR + '/music_and_lights.play.dbg',
-                        format='[%(asctime)s] %(levelname)s {%(pathname)s:%(lineno)d}'
-                               ' - %(message)s',
-                        level='INFO')
+    logging.basicConfig(
+        filename=hardware_manager.configuration_manager.LOG_DIR + '/music_and_lights.play.dbg',
+        format='[%(asctime)s] %(levelname)s {%(pathname)s:%(lineno)d}'
+               ' - %(message)s',
+        level='INFO')
     # parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--log', default='INFO',
@@ -846,7 +926,7 @@ if __name__ == "__main__":
     if parser.parse_args().createcache:
         parser.set_defaults(readcache=False)
 
-     # Log to our log file at the specified level
+        # Log to our log file at the specified level
     level = levels.get(parser.parse_args().log.upper())
     logging.getLogger().setLevel(level)
 
@@ -859,7 +939,7 @@ if __name__ == "__main__":
     atexit.register(on_exit, lightshow)
 
     if lightshow.mode == 'audio-in':
-        audio_in()
+        lightshow.audio_in()
     elif lightshow.networking == "client":
         lightshow.network_client()
     else:
@@ -872,5 +952,5 @@ if __name__ == "__main__":
                 lightshow.play_song()
             except KeyboardInterrupt:
                 pass
-            
+
     on_exit(lightshow)
