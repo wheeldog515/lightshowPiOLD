@@ -44,9 +44,16 @@ if "raspberrypi" in platform.uname():
 else:
     # if this is not a RPi you can't run wiringPi so lets load the 
     # simulator as wiringPi
-    import light_simulator as wiringPi
-    #from light_simulator import *
     import Tkinter
+    import light_simulator
+
+    wiringPi = light_simulator.Gui()
+    gui_locals = threading.local()
+    parent = Tkinter.Tk() 
+    canvas = Tkinter.Canvas(parent)
+    gui_locals.parent = parent
+    gui_locals.canvas = canvas
+    
 
     pi = False
 
@@ -457,14 +464,11 @@ class Hardware(configuration_manager.Configuration):
         if not pi:
             linux = True
 
-            if platform.system() == "Windows":
-                self.parent = Tkinter.Tk() 
-                self.canvas = Tkinter.Canvas(self.parent)
-                wiringPi.s_global(self.parent, self.canvas)
-                linux = False
-
             gpioactive = int(not self.active_low_mode)
-            self.vr = threading.Thread(target=wiringPi.ui, args=(self.gpio_pins, self.gpiolen, self.pwm_max, gpioactive, linux))
+
+            wiringPi.setup_sim(self.gpio_pins, self.gpiolen, self.pwm_max, gpioactive, gui_locals)
+            self.vr = threading.Thread(target=wiringPi.start_display)
+
             self.vr.start()
             time.sleep(1)
             

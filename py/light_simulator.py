@@ -7,201 +7,216 @@
 
 from math import ceil
 import Tkinter
+import sys
+import threading
 
-gpio = list()
-state = list()
+class Gui(object):
+    def __init__(self):
+        self.is_setup = False
+        self.gpio_pins = None
+        self.gpiolen = None
+        self.pwm_max = None
+        self.gpioactive = None
+        self.gpio = list()
+        self.state = list()
 
-# on screen position of the tkinter window
-# 0,0 top left corner
-screen_x = 0
-screen_y = 0
-
-# radius of lights
-rad = 20
-
-# x and y of the first light inside the tkinter window
-x = rad * 2
-y = rad * 2
-
-# lights are evenly spaced by half the radius
-spacing = (rad * 2) + (rad / 2)
-
-# How many lights in a row
-max_row_length = 16
-
-
-red = "#FF0000"
-green = "#00FF00"
-blue = "#0000FF"
-white = "#FFFFFF"
-black = "#000000"
-
-def s_global(p,c):
-    global parent, canvas
-    parent = p
-    canvas = c
-    
-def ui(gpins, glen, pmax, gactive, linux):
-    """
-    
-    """
-    global parent, canvas, gpio_pins, gpiolen, pwm_max, gpioactive
-    
-    gpio_pins = gpins
-    gpiolen = glen
-    pwm_max = pmax
-    gpioactive = gactive
-    if linux:
-        parent = Tkinter.Tk()   
-        canvas = Tkinter.Canvas(parent)
-
-    row_length = gpiolen
-
-    if gpiolen > max_row_length:
-        row_length = max_row_length
-
-    # calculate number of rows
-    rows = int(ceil(gpiolen / row_length))
-
-    # size of the window
-    width = (row_length * spacing) + int((rad * 1.75))
-    height = (rows * spacing) + int(rad * 1.75)
-    
-    parent.geometry('{0:d}x{1:d}+{2:d}+{3:d}'.format(width, height, screen_x, screen_y))
-    parent.title("Lights")        
-    parent.protocol("WM_DELETE_WINDOW", quit)
-
-    x1, y1 = x, y
-    
-    counter = row_counter = 0
-    
-    while counter < gpiolen:
-        top_left = x1 - rad
-        bottom_left = y1 - rad
-        top_right = x1 + rad
-        bottom_right = y1 + rad
+   
+    def setup_sim(self, gpins, glen, pmax, gactive, gui_locals):
         
-        gpio.append(canvas.create_oval(top_left, 
-                                       bottom_left, 
-                                       top_right, 
-                                       bottom_right, 
-                                       fill="#FFFFFF"))
-
-        x1 += spacing
-        row_counter += 1
-
-        if row_counter == row_length:
-            x1 = x
-            y1 += spacing
-            row_counter = 0
-        counter += 1
-
-    canvas.pack(fill=Tkinter.BOTH, expand=1)
-    
-    parent.mainloop()
-
-
-def null_function():
-    """
-    does nothing, callback for WM_DELETE_WINDOW to prevent window close
-    """
-    pass
-
-def quit():
-    """
-    exit the gui
-    """
-    if 'normal' == parent.state():
-        parent.destroy()
+        self.gui_locals = gui_locals
+        self.parent = self.gui_locals.parent
+        self.canvas = self.gui_locals.canvas
         
-def softPwmWrite(gpin, brightness):
-    """
-    
-    :param gpin, int, to be used as index of gpio pin to use
-    :param birghtness, int, brightness of light
-    """
-    pin = gpio_pins.index(gpin)
-    if gpioactive:
-        brightness = 100 - brightness
-    level = '#{0:02X}{1:02X}{2:02X}'.format(255, int(ceil(brightness * 2.55)), int(ceil(brightness * 2.55)))
-    canvas.itemconfig(gpio[pin], fill=level)
-    parent.update()
+        self.gpio_pins = gpins
+        self.gpiolen = glen
+        self.pwm_max = pmax
+        self.gpioactive = gactive
+        
+        # on screen position of the tkinter window
+        # 0,0 top left corner
+        self.screen_x = 0
+        self.screen_y = 0
 
-def digitalWrite(gpin, onoff):
-    """
-    
-    :param gpin, int, to be used as index of gpio pin to use
-    :param onoff, on or off
-    """
-    pin = gpio_pins.index(gpin)
-    if gpioactive:
-        onoff = 1 - onoff
-    canvas.itemconfig(gpio[pin], fill=(blue, white)[onoff])
-    parent.update()
+        # radius of lights
+        self.rad = 10
 
-# Empty functions, most will remain empty as they are not needed
-# but we can implement any that are needed in the future.
-def wiringPiSetup():
-    """Empty function"""
-    pass
+        # x and y of the first light inside the tkinter window
+        self.x = self.rad * 2
+        self.y = self.rad * 2
 
-#def wiringPiSetupSys():
-#def wiringPiSetupGpio():
-#def wiringPiSetupPhys():
+        # lights are evenly spaced by half the radius
+        self.spacing = (self.rad * 2) + (self.rad / 2)
 
-def softPwmCreate(*agrs):
-    """Empty function"""
-    pass
+        # How many lights in a row
+        self.max_row_length = 16
 
+        self.row_length = self.gpiolen
 
-def pinMode(*agrs):
-    """Empty function"""
-    pass
+        if self.gpiolen > self.max_row_length:
+            self.row_length = self.max_row_length
 
+        # calculate number of rows
+        self.rows = int(ceil(self.gpiolen / self.row_length))
 
-def mcp23017Setup(*agrs):
-    """Empty function"""
-    pass
+        # size of the window
+        self.width = (self.row_length * self.spacing) + int((self.rad * 1.75))
+        self.height = (self.rows * self.spacing) + int(self.rad * 1.75)
 
+        self.red = "#FF0000"
+        self.green = "#00FF00"
+        self.blue = "#0000FF"
+        self.white = "#FFFFFF"
+        self.black = "#000000"
+        
+        self.parent.geometry('{0:d}x{1:d}+{2:d}+{3:d}'.format(self.width, self.height, self.screen_x, self.screen_y))
+        self.parent.title("Lights")        
+        self.parent.protocol("WM_DELETE_WINDOW", self.quit)
+        x1, y1 = self.x, self.y
+        
+        row_counter = 0
+        
+        for counter in range(self.gpiolen):
+            top_left = x1 - self.rad
+            bottom_left = y1 - self.rad
+            top_right = x1 + self.rad
+            bottom_right = y1 + self.rad
+            
+            self.gpio.append(self.canvas.create_oval(top_left, 
+                                                bottom_left, 
+                                                top_right, 
+                                                bottom_right, 
+                                                fill="#FFFFFF"))
 
-def mcp23s17Setup(*agrs):
-    """Empty function"""
-    pass
+            x1 += self.spacing
+            row_counter += 1
 
+            if row_counter == self.row_length:
+                x1 = self.x
+                y1 += self.spacing
+                row_counter = 0
 
-def mcp23016Setup(*agrs):
-    """Empty function"""
-    pass
-
-
-def mcp23008Setup(*agrs):
-    """Empty function"""
-    pass
-
-
-def mcp23s08Setup(*agrs):
-    """Empty function"""
-    pass
-
-
-def pcf8574Setup(*agrs):
-    """Empty function"""
-    pass
+        self.canvas.pack(fill=Tkinter.BOTH, expand=1)
 
 
-def sr595Setup(*agrs):
-    """Empty function"""
-    pass
+    def start_display(self):
+        """
+        
+        """
+        self.parent.mainloop()
+            
+    def quit(self):
+        """
+        
+        """
+        if 'normal' == self.parent.state():
+            self.parent.destroy()
+
+    def softPwmWrite(self, gpin, brightness):
+        """
+        
+        :param gpin, int, to be used as index of gpio pin to use
+        :param birghtness, int, brightness of light
+        """
+        pin = self.gpio_pins.index(gpin)
+        if self.gpioactive:
+            brightness = 100 - brightness
+        level = '#{0:02X}{1:02X}{2:02X}'.format(255, int(ceil(brightness * 2.55)), int(ceil(brightness * 2.55)))
+        try:
+            self.canvas.itemconfig(self.gpio[pin], fill=level)
+            self.parent.update()
+        except:
+            pass
+        
+    def digitalWrite(self, gpin, onoff):
+        """
+        
+        :param gpin, int, to be used as index of gpio pin to use
+        :param onoff, on or off
+        """
+        pin = self.gpio_pins.index(gpin)
+        item = self.gpio[pin]
+        if self.gpioactive:
+            onoff = 1 - onoff
+        color = (self.blue, self.white)[onoff]
+        try:
+            self.canvas.itemconfig(item, fill=color)
+            self.parent.update()
+        except:
+            pass
+        
+    # Empty functions, most will remain empty as they are not needed
+    # but we can implement any that are needed in the future.
+    # TODO: (Tom) Implement softPwmCreate, and pinMode and add option to set 
+    #             light colors (individual or all) through these functions
+    #             Add empty functions for all other wiringPi methods that work in python
+    #             incase we decide to use them in the future.
+    #             
+    def wiringPiSetup(self):
+        """Empty function"""
+        pass
+
+    #def wiringPiSetupSys():
+    #def wiringPiSetupGpio():
+    #def wiringPiSetupPhys():
+
+    def softPwmCreate(self, *agrs):
+        """Empty function"""
+        pass
 
 
-def softPwmCreate(*agrs):
-    """Empty function"""
-    pass
+    def pinMode(self, *agrs):
+        """Empty function"""
+        pass
 
 
-def pinMode(*agrs):
-    """Empty function"""
-    pass
+    def mcp23017Setup(self, *agrs):
+        """Empty function"""
+        pass
+
+
+    def mcp23s17Setup(self, *agrs):
+        """Empty function"""
+        pass
+
+
+    def mcp23016Setup(self, *agrs):
+        """Empty function"""
+        pass
+
+
+    def mcp23008Setup(*agrs):
+        """Empty function"""
+        pass
+
+
+    def mcp23s08Setup(self, *agrs):
+        """Empty function"""
+        pass
+
+
+    def pcf8574Setup(self, *agrs):
+        """Empty function"""
+        pass
+
+
+    def sr595Setup(self, *agrs):
+        """Empty function"""
+        pass
+
+
+    def softPwmCreate(self, *agrs):
+        """Empty function"""
+        pass
+
+
+    def pinMode(self, *agrs):
+        """Empty function"""
+        pass
+
+if __name__ in "__main__":
+    x = Gui()
+
+#a = subprocess.Popen(["python", "gui.py", "0,1,3,4,5,6,7","8","100","0"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 
 
 #def wiringPiFailure(*args):
