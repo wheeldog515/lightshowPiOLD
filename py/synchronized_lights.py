@@ -634,7 +634,7 @@ class Lightshow(hardware_manager.Hardware):
             row += 1
             
         # make sure lame ends
-        music_file.close()
+        self.music_file.close()
         #for proc in psutil.process_iter():
             #if proc.name() == "lame":
                 #proc.kill()
