@@ -213,11 +213,6 @@ class Gui(object):
         """Empty function"""
         pass
 
-if __name__ in "__main__":
-    x = Gui()
-
-#a = subprocess.Popen(["python", "gui.py", "0,1,3,4,5,6,7","8","100","0"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-
 
 #def wiringPiFailure(*args):
 #def wiringPiFindNode(*args):
