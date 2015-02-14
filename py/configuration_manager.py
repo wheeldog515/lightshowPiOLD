@@ -5,9 +5,6 @@
 #
 # Author: Todd Giles (todd@lightshowpi.com)
 # Author: Tom Enos
-
-# TODO(todd): Add a main and allow running configuration manager alone to view the current
-#                  configuration, and potentially edit it.
 """
 Configuration management for the lightshow.
 
@@ -27,8 +24,8 @@ import logging
 import os
 import platform
 import sys
-#import warnings
 from collections import defaultdict
+from collections import OrderedDict as dict
 
 # The home directory and configuration directory for the application.
 HOME_DIR = os.getenv("SYNCHRONIZED_LIGHTS_HOME")
@@ -61,7 +58,7 @@ class Configuration(object):
         self.hardware_config = dict()
         self.network_config = dict()
         self.lightshow_config = dict()
-        self.audio_config = dict()
+        self.audio_processing_config = dict()
         self._SONG_LIST = None
         self.CONFIG = ConfigParser.RawConfigParser(allow_no_value=True)
 
@@ -75,6 +72,13 @@ class Configuration(object):
         if not os.path.isfile(self.STATE_FILENAME):
             open(self.STATE_FILENAME, 'a').close()
         self.load_state()
+        
+    def save_config(self):
+        with open(self.CONFIG_DIR + '/new_configuration.cfg', 'wb') as configfile:
+            self.CONFIG.write(configfile)
+
+    def set_option(self, section, option, value):
+        self.CONFIG.set(str(section), str(option), str(value))
 
     def load_configs(self, per_song=None):
         """
@@ -90,7 +94,7 @@ class Configuration(object):
         self.hardware_config = dict()
         self.network_config = dict()
         self.lightshow_config = dict()
-        self.audio_config = dict()
+        self.audio_processing_config = dict()
 
         default = os.path.join(self.CONFIG_DIR, 'defaults.cfg')
         overrides = os.path.join(self.CONFIG_DIR, 'overrides.cfg')
@@ -239,29 +243,29 @@ class Configuration(object):
         loading and parsing it from a file as necessary.
         """
         for key, value in self.CONFIG.items('audio_processing'):
-            self.audio_config[key] = value
+            self.audio_processing_config[key] = value
 
-        self.audio_config['min_frequency'] = float(self.audio_config['min_frequency'])
-        self.audio_config['max_frequency'] = float(self.audio_config['max_frequency'])
+        self.audio_processing_config['min_frequency'] = float(self.audio_processing_config['min_frequency'])
+        self.audio_processing_config['max_frequency'] = float(self.audio_processing_config['max_frequency'])
 
-        if self.audio_config['custom_channel_mapping']:
-            self.audio_config['custom_channel_mapping'] = \
-                [int(channel) for channel in self.audio_config['custom_channel_mapping'].split(',')]
+        if self.audio_processing_config['custom_channel_mapping']:
+            self.audio_processing_config['custom_channel_mapping'] = \
+                [int(channel) for channel in self.audio_processing_config['custom_channel_mapping'].split(',')]
         else:
-            self.audio_config['custom_channel_mapping'] = 0
+            self.audio_processing_config['custom_channel_mapping'] = 0
 
-        if self.audio_config['custom_channel_frequencies']:
-            self.audio_config['custom_channel_frequencies'] = \
+        if self.audio_processing_config['custom_channel_frequencies']:
+            self.audio_processing_config['custom_channel_frequencies'] = \
                 [int(channel) for channel in
-                 self.audio_config['custom_channel_frequencies'].split(',')]
+                 self.audio_processing_config['custom_channel_frequencies'].split(',')]
         else:
-            self.audio_config['custom_channel_frequencies'] = 0
+            self.audio_processing_config['custom_channel_frequencies'] = 0
 
-        self.audio_config['fm'] = self.CONFIG.getboolean('audio_processing', 'fm')
+        self.audio_processing_config['fm'] = self.CONFIG.getboolean('audio_processing', 'fm')
 
-        self.audio_config['chunk_size'] = int(self.audio_config['chunk_size'])
-        if self.audio_config['chunk_size'] % 8 != 0:
-            self.audio_config['chunk_size'] = 2048
+        self.audio_processing_config['chunk_size'] = int(self.audio_processing_config['chunk_size'])
+        if self.audio_processing_config['chunk_size'] % 8 != 0:
+            self.audio_processing_config['chunk_size'] = 2048
             logging.warn('chunk_size must be a multiple of 8, defaulting to 2048')
 
     def per_song_config(self, song=None):
@@ -365,3 +369,4 @@ class Configuration(object):
             fcntl.lockf(state_fp, fcntl.LOCK_EX)
             self.STATE.write(state_fp)
             fcntl.lockf(state_fp, fcntl.LOCK_UN)
+   
