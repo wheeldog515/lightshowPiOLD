@@ -154,7 +154,7 @@ class Lightshow(hardware_manager.Hardware):
         self.randomize_playlist = self.lightshow_config['randomize_playlist']
         self.audio_in_card = self.lightshow_config['audio_in_card']
 
-        self.chunk_size = self.audio_config['chunk_size']
+        self.chunk_size = self.audio_processing_config['chunk_size']
 
         self.networking = self.network_config['networking']
         self.port = self.network_config['port']
@@ -162,7 +162,7 @@ class Lightshow(hardware_manager.Hardware):
         self.not_pwm = [not pin if pin else not pin for pin in self.is_pin_pwm]
 
         if "raspberrypi" in platform.uname():
-            self.usefm = self.audio_config['fm']
+            self.usefm = self.audio_processing_config['fm']
         else:
             self.usefm = False
 
@@ -177,7 +177,7 @@ class Lightshow(hardware_manager.Hardware):
         self.stop = False
 
         self.pyaudio_audio_device = None
-        self.fm_frequency = self.audio_config['frequency']
+        self.fm_frequency = self.audio_processing_config['frequency']
         self.music_pipe_r, self.music_pipe_w = os.pipe()
         self.song_filename = None
         self.audio_device = None
@@ -256,10 +256,10 @@ class Lightshow(hardware_manager.Hardware):
         Calculate frequency values for each channel,
         taking into account custom settings.
         """
-        min_frequency = self.audio_config['min_frequency']
-        max_frequency = self.audio_config['max_frequency']
-        custom_channel_mapping = self.audio_config['custom_channel_mapping']
-        custom_channel_frequencies = self.audio_config['custom_channel_frequencies']
+        min_frequency = self.audio_processing_config['min_frequency']
+        max_frequency = self.audio_processing_config['max_frequency']
+        custom_channel_mapping = self.audio_processing_config['custom_channel_mapping']
+        custom_channel_frequencies = self.audio_processing_config['custom_channel_frequencies']
 
         # How many channels do we need to calculate the frequency for
         if custom_channel_mapping != 0 and len(custom_channel_mapping) == self.gpiolen:
@@ -612,10 +612,10 @@ class Lightshow(hardware_manager.Hardware):
             # what is stored in the cached array
             show_configuration = numpy.array([[self.gpiolen],
                                               [self.sample_rate],
-                                              [self.audio_config['min_frequency']],
-                                              [self.audio_config['max_frequency']],
-                                              [self.audio_config['custom_channel_mapping']],
-                                              [self.audio_config['custom_channel_frequencies']],
+                                              [self.audio_processing_config['min_frequency']],
+                                              [self.audio_processing_config['max_frequency']],
+                                              [self.audio_processing_config['custom_channel_mapping']],
+                                              [self.audio_processing_config['custom_channel_frequencies']],
                                               [self.chunk_size],
                                               [self.num_channels]], dtype=object)
 
@@ -726,10 +726,10 @@ class Lightshow(hardware_manager.Hardware):
 
         show_configuration = numpy.array([[self.gpiolen],
                                           [self.sample_rate],
-                                          [self.audio_config['min_frequency']],
-                                          [self.audio_config['max_frequency']],
-                                          [self.audio_config['custom_channel_mapping']],
-                                          [self.audio_config['custom_channel_frequencies']],
+                                          [self.audio_processing_config['min_frequency']],
+                                          [self.audio_processing_config['max_frequency']],
+                                          [self.audio_processing_config['custom_channel_mapping']],
+                                          [self.audio_processing_config['custom_channel_frequencies']],
                                           [self.chunk_size],
                                           [self.num_channels]], dtype=object)
 
