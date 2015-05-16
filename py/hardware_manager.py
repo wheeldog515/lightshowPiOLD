@@ -58,10 +58,10 @@ class Pin(object):
     Pin class
     """
 
-    def __init__(self, pin_number, pin_mode, active_low_mode, pwm_max):
+    def __init__(self, pin_number, pin_mode, active_low_mode, pwm_max, device=""):
         self.pin_number = pin_number
         self.pwm = pin_mode
-
+        self.device = device
         self.pwm_max = pwm_max
         self.active_low_mode = active_low_mode
 
@@ -76,6 +76,14 @@ class Pin(object):
         self.always_on = False
         self.always_off = False
         self.inverted = False
+
+        if self.pwm and device == "":
+            self.action = lambda intensity : wiringpi.softPwmWrite(self.pin_number, int(intensity * self.pwm_max))
+        elif device == "sn3218":
+            self.action = lambda intensity : wiringpi.analogWrite(self.pin_number + 577, int(intensity * 255)) 
+            self.inout = 'pin is output only'
+        else:
+            self.action = lambda intensity : wiringpi.digitalWrite(self.pin_number, int(intensity))
 
     def __str__(self):
         """
@@ -104,18 +112,20 @@ class Pin(object):
         """
         set up this pin as input
         """
-        self.inout = 'pin is input'
-        wiringpi.pinMode(self.pin_number, 0)
+        if self.device == "":
+            self.inout = 'pin is input'
+            wiringpi.pinMode(self.pin_number, 0)
 
     def set_as_output(self):
         """
         set up this pin as output
         """
-        self.inout = 'pin is output'
-        if self.pwm:
-            wiringpi.softPwmCreate(self.pin_number, 0, self.pwm_max)
-        else:
-            wiringpi.pinMode(self.pin_number, 1)
+        if self.device == "":
+            self.inout = 'pin is output'
+            if self.pwm:
+                wiringpi.softPwmCreate(self.pin_number, 0, self.pwm_max)
+            else:
+                wiringpi.pinMode(self.pin_number, 1)
 
     def set_always_on(self, value):
         """
@@ -167,10 +177,12 @@ class Pin(object):
         # taking the absolute value insures a positive number 
         brightness = abs(int(self.active_low_mode) - brightness)
 
-        if self.pwm:
-            wiringpi.softPwmWrite(self.pin_number, int(brightness * self.pwm_max))
-        else:
-            wiringpi.digitalWrite(self.pin_number, int(brightness))
+        #if self.pwm:
+            #wiringpi.softPwmWrite(self.pin_number, int(brightness * self.pwm_max))
+        #else:
+            #wiringpi.digitalWrite(self.pin_number, int(brightness))
+
+        self.action(brightness)
 
         self.state = brightness
 
@@ -184,6 +196,12 @@ class Hardware(configuration_manager.Configuration):
         self.lights = list()
 
         self.devices = self.hardware_config['devices']
+
+        if "sn3218" in list(self.devices.keys()):
+            self.device = "sn3218"
+        else:
+            self.device = ""
+            
         self.gpio_pins = self.hardware_config['gpio_pins']
         self.gpiolen = self.hardware_config['gpiolen']
         self.pin_modes = self.hardware_config['pin_modes']
@@ -245,7 +263,7 @@ class Hardware(configuration_manager.Configuration):
             else:
                 mode = False
 
-            self.lights.append(Pin(pin, mode, self.active_low_mode, self.pwm_max))
+            self.lights.append(Pin(pin, mode, self.active_low_mode, self.pwm_max, self.device))
 
     def set_overrides(self):
         """
@@ -340,6 +358,11 @@ class Hardware(configuration_manager.Configuration):
                         params = slave
                         wiringpi.pcf8574Setup(int(params['pinBase']),
                                               int(params['i2cAddress'], 16))
+
+                # sn3218
+                elif device.lower() == "sn3218":
+                    wiringpi.sn3218(int(params['pinBase']))
+                    
 
                 else:
                     logging.error("Device defined is not supported, please check your devices "
