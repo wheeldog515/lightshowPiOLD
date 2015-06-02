@@ -361,9 +361,10 @@ class Hardware(configuration_manager.Configuration):
 
                 # sn3218
                 elif device.lower() == "sn3218":
-                    wiringpi.sn3218(int(params['pinBase']))
+                    for slave in device_slaves:
+                        params = slave
+                        wiringpi.sn3218Setup(int(params['pinBase']))
                     
-
                 else:
                     logging.error("Device defined is not supported, please check your devices "
                                   "settings: " + str(device))
