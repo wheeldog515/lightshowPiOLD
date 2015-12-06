@@ -782,8 +782,6 @@ if __name__ == "__main__":
     client = network.networking == "client"
 
     decay_factor = cm.lightshow.decay_factor
-    print decay_factor
-    print decay_factor > 0
     if decay_factor > 0:
         decay = np.zeros(cm.hardware.gpio_len, dtype='float32')
 
