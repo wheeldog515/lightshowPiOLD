@@ -127,12 +127,18 @@ def update_lights(matrix, mean, std):
     :param std: standard deviation of fft values
     :type std: list
     """
+    global decay
     brightness = matrix - mean + (std * 0.5)
     brightness = brightness / (std * 1.25)
 
     # insure that the brightness levels are in the correct range
     brightness = np.clip(brightness, 0.0, 1.0)
     brightness = np.round(brightness, decimals=3)
+
+    if decay_factor > 0:
+        decay = np.where(decay <= brightness, brightness, decay)
+        brightness = np.where(decay - decay_factor > 0, decay - decay_factor, brightness)
+        decay = np.where(decay - decay_factor > 0, decay - decay_factor, decay)
 
     # broadcast to clients if in server mode
     if server:
@@ -774,6 +780,13 @@ if __name__ == "__main__":
     network = hc.network
     server = network.networking == 'server'
     client = network.networking == "client"
+
+    decay_factor = cm.lightshow.decay_factor
+    print decay_factor
+    print decay_factor > 0
+    if decay_factor > 0:
+        decay = np.zeros(cm.hardware.gpio_len, dtype='float32')
+
 
     if _usefm:
         music_pipe_r, music_pipe_w = os.pipe()

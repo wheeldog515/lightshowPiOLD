@@ -274,6 +274,8 @@ class Configuration(object):
 
         lghtshw['postshow'] = postshow
 
+        lghtshw["decay_factor"] = self.config.getfloat(ls, 'decay_factor')
+
         self.lightshow = Section(lghtshw)
 
     def set_audio_processing(self):
