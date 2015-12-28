@@ -16,10 +16,8 @@ numpy: for FFT calculation - http://www.numpy.org/
 import hardware_controller as hc
 import numpy as np
 
-
-def piff(val, chunk_size, sample_rate):
-    '''Return the power array index corresponding to a particular frequency.'''
-    return int(chunk_size * val / sample_rate)
+piff_array = None
+window = list()
 
 def calculate_levels(data, chunk_size, sample_rate, frequency_limits, channels=2):
     '''Calculate frequency response for each channel defined in frequency_limits
@@ -30,6 +28,15 @@ def calculate_levels(data, chunk_size, sample_rate, frequency_limits, channels=2
     Optimizations from work by Scott Driscoll:
     http://www.instructables.com/id/Raspberry-Pi-Spectrum-Analyzer-with-RGB-LED-Strip-/
     '''
+    global piff_array, window
+
+    if piff_array is None:
+        fl = np.array(frequency_limits)
+        piff_array = ((fl * chunk_size) / sample_rate).astype(int)
+
+        for a in range(len(piff_array)):
+            if piff_array[a][0] == piff_array[a][1]:
+                piff_array[a][1] += 1
 
     # create a numpy array, taking just the left channel if stereo
     data_stereo = np.frombuffer(data, dtype=np.int16)
@@ -42,7 +49,9 @@ def calculate_levels(data, chunk_size, sample_rate, frequency_limits, channels=2
     # if you take an FFT of a chunk of audio, the edges will look like
     # super high frequency cutoffs. Applying a window tapers the edges
     # of each end of the chunk down to zero.
-    window = np.hanning(len(data))
+    if len(data) != len(window):
+        window = np.hanning(len(data))
+
     data = data * window
 
     # Apply FFT - real data
@@ -54,10 +63,19 @@ def calculate_levels(data, chunk_size, sample_rate, frequency_limits, channels=2
     # Calculate the power spectrum
     power = np.abs(fourier) ** 2
 
-    matrix = np.zeros(hc.GPIOLEN)
-    for i in range(hc.GPIOLEN):
-        # take the log10 of the resulting sum to approximate how human ears perceive sound levels
-        matrix[i] = np.log10(np.sum(power[piff(frequency_limits[i][0], chunk_size, sample_rate)
-                                          :piff(frequency_limits[i][1], chunk_size, sample_rate):1]))
+    cache_matrix = np.empty(hc.GPIOLEN, dtype='float32')
 
-    return matrix
+    for pin in range(hc.GPIOLEN):
+        # Get the sum of the power array index corresponding to a
+        # particular frequency.
+        cache_matrix[pin] = np.sum(power[piff_array[pin][0]:piff_array[pin][1]])
+
+    # take the log10 of the resulting sum to approximate how human ears
+    # perceive sound levels
+    if all(cache_matrix == 0.0):
+        return cache_matrix
+
+    with np.errstate(divide='ignore'):
+        cache_matrix = np.where(cache_matrix > 0.0, np.log10(cache_matrix), 0)
+
+    return cache_matrix
