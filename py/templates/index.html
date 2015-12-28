@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en" manifest="app.manifest">
+<head>
+<title>Light Show Pi</title>
+<meta charset="UTF-8">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#5e87b0">
+<link rel="manifest" href="manifest.json">
+
+<link rel="icon" sizes="192x192" href="img/ChristmasTree192.png">
+
+<link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
+
+<link rel="icon" href="favicon.ico" type="image/x-icon">
+<link rel="apple-touch-icon" sizes="144x144" href="img/ChristmasTree144.png" />
+<link rel="apple-touch-icon" sizes="114x114" href="img/ChristmasTree114.png" />
+<link rel="apple-touch-icon" sizes="72x72" href="img/ChristmasTree72.png" />
+<link rel="apple-touch-icon" sizes="57x57" href="img/ChristmasTree57.png" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1"> 
+
+<link rel="stylesheet" href="css/mytheme.css">
+<link rel="stylesheet" href="css/jquery.mobile.icons.min.css" />
+<link rel="stylesheet" href="css/jquery.mobile.structure-1.4.4.min.css" />
+<style>
+.full-width-slider input {
+    display: none;
+}
+.full-width-slider .ui-slider-track {
+    margin-left: 15px;
+}
+.ui-panel {
+width: 75%;
+}
+
+#schbr{display:none}
+
+@media (max-width: 486px) {
+    #schbr{display:block}
+}
+</style>
+<script src="js/jquery-2.1.1.min.js"></script>
+<script src="js/jquery.mobile-1.4.4.min.js"></script>
+<script>
+var lat=$sch.configData['locationData']['lat'];
+var lng=$sch.configData['locationData']['lng'];
+
+function sendPosition()
+{
+	if (navigator.geolocation)
+	{
+		navigator.geolocation.getCurrentPosition(
+			function(position)
+			{
+				try{
+				//socket.emit('gps', {lat: position.coords.latitude, lng: position.coords.longitude,acc:position.coords.accuracy,status:1});
+					jQuery.ajax(
+					{
+						type: 'POST',
+						url: '/scheduler',
+						data: 'option=1&lat='+position.coords.latitude+'&lng='+position.coords.longitude,
+						async: true,
+						success: function(data)
+						{
+						}
+					});
+				}catch(e){}
+			},
+			// next function is the error callback
+					function(error)
+					{
+						switch (error.code)
+						{
+							case error.TIMEOUT:
+								alert('Timeout');
+								break;
+							case error.POSITION_UNAVAILABLE:
+								alert('Position unavailable');
+								break;
+							case error.PERMISSION_DENIED:
+								alert('You must accept to use this app');
+								break;
+							case error.UNKNOWN_ERROR:
+								alert('Unknown error');
+								break;
+						}
+					});
+	}
+}
+
+if (lat==0){
+	sendPosition();
+}
+</script>
+<script src='js/maintest.js'></script>
+<!--<script src='static/js/music.js'></script>-->
+</head>
+<body>
+
+<div data-role="page" id='home' data-theme='b'>
+  <div data-role="header">
+    <h1>Light Show Pi</h1>
+	<a href='#leftpanel1' data-icon='arrow-r' data-iconpos='notext' data-theme='g' class='playlistStatus'></a>
+  </div>
+  <div data-role="main" class="ui-content" style='text-align:center'>
+    <!--<h4>Currently Playing: <span class='currentsong'></span></h4>-->
+	<form class="full-width-slider">
+		<ul data-role="listview" data-inset="true">
+			<li class="ui-field-contain">
+			<h4 style='text-align:center'>Currently Playing:<br/> <span class='currentsong'></span></h4>
+			<div class="full-width-slider">
+				<label for="slider" class="ui-hidden-accessible">Slider:</label>
+				<input name="slider" id="slider" class='slider' min="0" max="100" value="0" type="range"  data-highlight="true" data-theme='d'>
+			</div>
+				<button class='playAudioBtn' type='button'>Play Audio</button>
+			</li>
+		</ul>
+	</form>
+	<a href="#" id='lightsOn' data-role='button' data-theme='g' data-icon='check' data-inline='true'>Lights On</a>
+	<a href="#" id='lightsOff' data-role='button' data-theme='f' data-icon='delete' data-inline='true'>Lights Off</a>
+	<br/>
+	<a href="#" id='Audioin' data-role='button' data-theme='b' data-icon='check' data-inline='true'>Toggle Audio In</a>
+	
+	<!--<a href="#" id='lightsOff' data-role='button' data-theme='f' data-icon='delete' data-inline='true'>Play</a>
+	<button type="button" onclick="play();">Play</button>-->
+	<!--<a href="#" id='applysettings' data-role='button' data-theme='f' data-icon='delete' data-inline='true'>applysettings</a>-->
+	<br/><a href="#" id='playallmusic' data-role='button' data-theme='e'>Play All Music</a><br/>
+	<ul data-role='listview' data-inset='true' data-theme='d'>
+	<li><a href='#playlists'>Playlists</a></li>
+	<li><a href='#songs'>Songs</a></li>
+	<li><a href='#scheduler'>Scheduler</a></li>
+	<li><a href='#lights'>Lighting Control</a></li>
+	<li><a href='#settings'>Settings</a></li>
+	</ul>
+	<br/>
+	<ul data-role='listview' data-inset='true' data-theme='d'>
+	<li><a href='#'id='restartPi'>Restart Pi</a></li>
+	<li><a href='#' id='shutdownPi'>Shutdown Pi</a></li>
+	</ul>
+  </div>
+  <div data-role="popup" id="popupError" data-theme="b" class="ui-corner-all" data-dismissible='false' data-history='false' data-overlay-theme='a'>
+    <div data-role="header" data-theme="b">
+			<h1 id='dialogHeader'>No Reply From Pi</h1>
+		</div>
+		<div role="main" class="ui-content" style='text-align:center'>
+			<h4>The Server did not respond.  Please make sure it is on and accessible.  This message will go away when connection is restored.</h4>
+        </div>
+  </div>
+  <div data-role="popup" id="popupRestart" data-theme="b" class="ui-corner-all" data-dismissible='false' data-history='false' data-overlay-theme='a'>
+    <div data-role="header" data-theme="b">
+			<h1 id='dialogHeader'>Restart Pi</h1>
+		</div>
+		<div role="main" class="ui-content" style='text-align:center'>
+			<h4>Are you sure you want to restart the Server?</h4>
+			<a href="#" class="ui-btn ui-corner-all ui-shadow ui-btn-inline ui-btn-b"id="restartCancel" data-rel="back">Cancel</a>
+			<a href="#" class="ui-btn ui-corner-all ui-shadow ui-btn-inline ui-btn-b"id="restartPiConfirm">Restart Pi</a>
+        </div>
+  </div>
+  <div data-role="popup" id="popupShutdown" data-theme="b" class="ui-corner-all" data-dismissible='false' data-history='false' data-overlay-theme='a'>
+    <div data-role="header" data-theme="b">
+			<h1 id='dialogHeader'>Shutdown Pi</h1>
+		</div>
+		<div role="main" class="ui-content" style='text-align:center'>
+			<h4>Are you sure you want to shutdown the Server?</h4>
+			<a href="#" class="ui-btn ui-corner-all ui-shadow ui-btn-inline ui-btn-b"id="shutdownCancel" data-rel="back">Cancel</a>
+			<a href="#" class="ui-btn ui-corner-all ui-shadow ui-btn-inline ui-btn-b"id="shutdownPiConfirm">Shutdown Pi</a>
+        </div>
+  </div>
+	<div data-role="panel" id="leftpanel1" data-position="left" data-display="overlay" data-theme="b" data-position-fixed="true">
+        <div class="ui-panel-inner"><h3>Current Playlist:</h3>
+		<ul data-role='listview' data-inset='true' class='playlistpanelul'data-theme='e'></ul>
+		<a href="#demo-links" data-role='button' data-rel="close">Close panel</a></div>
+	</div>
+</div>
+
+<div data-role="page" id='playlists' data-theme='b'>
+  <div data-role="header">
+    <h3>Playlists</h3>
+	<a href='#leftpanel2' data-icon='arrow-r' data-iconpos='notext' data-theme='g' class='playlistStatus'></a>
+  </div>
+  <div data-role="main" class="ui-content" style='text-align:center'>
+	<form class="full-width-slider">
+		<ul data-role="listview" data-inset="true">
+			<li class="ui-field-contain">
+			<h4 style='text-align:center'>Currently Playing:<br/> <span class='currentsong'></span></h4>
+			<div class="full-width-slider">
+				<label for="slider" class="ui-hidden-accessible">Slider:</label>
+				<input class='slider' min="0" max="100" value="0" type="range"  data-highlight="true" data-theme='d'>
+				</div>
+				<button class='playAudioBtn' type='button'>Play Audio</button>
+			</li>
+		</ul>
+	</form>
+	<button id='newplaylist' data-theme='g' data-inline='true' data-icon='plus' type='button'>New Playlist</button>
+	<ul data-role='listview' data-inset='true' data-theme='d' id='playlistsul'>
+		<li data-theme='b' data-role="list-divider">Playlists</li>
+</ul><br/>
+	<a href='#home' data-role='button' data-theme='e'>Back To Main Menu</a>
+  </div>
+  <div data-role="popup" id="popupPlaylist" data-theme="b" class="ui-corner-all">
+    <form>
+        <div class='ui-content' style='text-align:center'>
+            <h3>Select an Action</h3>
+			<h4 id='popupTitlelist'></h4>
+            <button type='button' id='playNowlist'>Play Now</button>
+            <button type='button' id='deletelist' data-theme='f'>Delete</button>
+        </div>
+    </form>
+  </div>
+    <div data-role="popup" id="popupNewPlaylist" data-theme="b" class="ui-corner-all">
+    <form>
+        <div class='ui-content' style='text-align:center'>
+            <h3>Select Songs</h3>
+			<label for='newplaylistname'>Playlist name:</label>
+			<input id='newplaylistname' data-theme='d'>
+			<ul data-inset='true' data-role='listview' id='playlistsongs'></ul>
+			<button type='button' id='newplaylistsubmit' data-theme='b'>Submit</button>
+		</div>
+    </form>
+    </div>
+	<div data-role="panel" id="leftpanel2" data-position="left" data-display="overlay" data-theme="b" data-position-fixed="true">
+        <div class="ui-panel-inner"><h3>Current Playlist:</h3>
+		<ul data-role='listview' data-inset='true' class='playlistpanelul'data-theme='e'></ul>
+		<a href="#demo-links" data-role='button' data-rel="close">Close panel</a></div>
+	</div>
+</div> 
+
+<div data-role="page" id='songs' data-theme='b'>
+	<div data-role="header">
+		<h3>Songs</h3>
+		<a href='#leftpanel3' data-icon='arrow-r' data-iconpos='notext' data-theme='g' class='playlistStatus'></a>
+	</div>
+	<div data-role="main" class="ui-content" style='text-align:center'>
+		<form class="full-width-slider">
+			<ul data-role="listview" data-inset="true">
+				<li class="ui-field-contain">
+					<h4 style='text-align:center'>Currently Playing: <br/><span class='currentsong'></span></h4>
+					<div class="full-width-slider">
+						<label for="slider" class="ui-hidden-accessible">Slider:</label>
+						<input class='slider' min="0" max="100" value="0" type="range"  data-highlight="true" data-theme='d'>
+					</div>
+					<button class='playAudioBtn' type='button'>Play Audio</button>
+				</li>
+			</ul>
+		</form>
+		<!--<form method="POST" enctype="multipart/form-data" action="upload">
+			<input type="file" name="myfile"/>
+			<button type="submit" data-theme='e'>Upload Song</button>
+		</form>-->
+		<form id='uploadfile' data-ajax='false' method="POST" enctype="multipart/form-data" action="upload">
+			<input type="file" name="myfile"  multiple=multiple/>
+			<br/>
+			<input type="submit" value='Submit' />
+		</form>
+		<progress value='0' max='100' style='width: 100%;height: 1.3em;visibility: hidden;'></progress>
+					<br/>
+		<ul data-role='listview' data-inset='true' data-theme='d' id='songsul'>
+			<li data-theme='b' data-role="list-divider">Songs</li>
+</ul><br/>
+		<a href='#home' data-role='button' data-theme='e'>Back To Main Menu</a>
+	</div>
+	<div data-role="popup" id="popupSong" data-theme="b" class="ui-corner-all">
+		<form>
+			<div class='ui-content' style='text-align:center'>
+				<h3>Select an Action</h3>
+				<h4 id='popupTitle'></h4>
+				<button type='button' id='playNow'>Play Now</button>
+				<button type='button' id='addToQueue'>Add to Queue</button>
+			</div>
+		</form>
+	</div>
+	<div data-role="panel" id="leftpanel3" data-position="left" data-display="overlay" data-theme="b" data-position-fixed="true">
+        <div class="ui-panel-inner"><h3>Current Playlist:</h3>
+		<ul data-role='listview' data-inset='true' class='playlistpanelul'data-theme='e'></ul>
+		<a href="#demo-links" data-role='button' data-rel="close">Close panel</a></div>
+	</div>
+</div> 
+
+<div data-role="page" id='settings' data-theme='b'>
+	<div data-role="header">
+		<h3>Settings</h3>
+		<a href='#leftpanel4' data-icon='arrow-r' data-iconpos='notext' data-theme='g' class='playlistStatus'></a>
+	</div>
+	<div data-role="main" class="ui-content" style='text-align:center'>
+		<form class="full-width-slider">
+			<ul data-role="listview" data-inset="true">
+				<li class="ui-field-contain">
+					<h4 style='text-align:center'>Currently Playing:<br/> <span class='currentsong'></span></h4>
+					<div class="full-width-slider">
+						<label for="slider" class="ui-hidden-accessible">Slider:</label>
+						<input class='slider' min="0" max="100" value="0" type="range"  data-highlight="true" data-theme='d'>
+					</div>
+					<button class='playAudioBtn' type='button'>Play Audio</button>
+				</li>
+			</ul>
+		</form>
+		<div data-role="tabs" id="tabs">
+		  <div data-role="navbar">
+			<ul id='tabsul'>
+			</ul>
+		  </div>
+		</div>
+		<h4>A Restart is needed to use any new changes</h4>
+		<a href='#home' data-role='button' data-theme='e'>Back To Main Menu</a>
+	</div>
+	<div data-role="panel" id="leftpanel4" data-position="left" data-display="overlay" data-theme="b" data-position-fixed="true">
+        <div class="ui-panel-inner"><h3>Current Playlist:</h3>
+		<ul data-role='listview' data-inset='true' class='playlistpanelul'data-theme='e'></ul>
+		<a href="#demo-links" data-role='button' data-rel="close">Close panel</a></div>
+	</div>
+</div>
+
+<div data-role="page" id='lights' data-theme='b'>
+	<div data-role="header">
+		<h3>Lighting Control</h3>
+		<a href='#leftpanel5' data-icon='arrow-r' data-iconpos='notext' data-theme='g' class='playlistStatus'></a>
+	</div>
+	<div data-role="main" class="ui-content" style='text-align:center'>
+		<form class="full-width-slider">
+			<ul data-role="listview" data-inset="true">
+				<li class="ui-field-contain">
+					<h4 style='text-align:center'>Currently Playing:<br/> <span class='currentsong'></span></h4>
+					<div class="full-width-slider">
+						<label for="slider" class="ui-hidden-accessible">Slider:</label>
+						<input class='slider' min="0" max="100" value="0" type="range"  data-highlight="true" data-theme='d'>
+					</div>
+				</li>
+			</ul>
+		</form>
+			<ul id='lightsUl' data-role='listview' data-inset='true'>
+			</ul>
+		<a href='#home' data-role='button' data-theme='e'>Back To Main Menu</a>
+	</div>
+		<div data-role="panel" id="leftpanel5" data-position="left" data-display="overlay" data-theme="b" data-position-fixed="true">
+        <div class="ui-panel-inner"><h3>Current Playlist:</h3>
+		<ul data-role='listview' data-inset='true' class='playlistpanelul'data-theme='e'></ul>
+		<a href="#demo-links" data-role='button' data-rel="close">Close panel</a></div>
+	</div>
+</div>
+
+<div data-role="page" id='scheduler' data-theme='b'>
+  <div data-role="header">
+    <h3>Scheduler</h3>
+	<a href='#leftpanel5' data-icon='arrow-r' data-iconpos='notext' data-theme='g' class='playlistStatus'></a>
+  </div>
+  <div data-role="main" class="ui-content" style='text-align:center'>
+	<form class="full-width-slider">
+		<ul data-role="listview" data-inset="true">
+			<li class="ui-field-contain">
+			<h4 style='text-align:center'>Currently Playing:<br/> <span class='currentsong'></span></h4>
+			<div class="full-width-slider">
+				<label for="slider" class="ui-hidden-accessible">Slider:</label>
+				<input class='slider' min="0" max="100" value="0" type="range"  data-highlight="true" data-theme='d'>
+				</div>
+				<button class='playAudioBtn' type='button'>Play Audio</button>
+			</li>
+		</ul>
+	</form>
+	<input type='hidden' id='specifictime'>
+	<input type='hidden' id='specificplaylist' data-name=''>
+	
+	<!-- <div class="ui-field-contain"> -->
+	<label for='if' style='display:inline'> IF </label>
+	<select id='if' data-theme='d' data-inline='true'>
+	<option>Please Specify</option>
+	<option>light</option>
+	<option>sunrise</option>
+	<option>sunset</option>
+	<option>dark</option>
+	<option>Specific Time</option>
+	</select>
+	<!-- </div> -->
+	<br id='schbr' />
+	<!-- <div class="ui-field-contain"> -->
+	<label for='then' style='display:inline'> THEN </label>
+	<select id='then' data-theme='d' data-inline='true'>
+	<option value='Please Specify'>Please Specify</option>
+	<option value='lightsoff'>lights off</option>
+	<option value='lightson'>lights on</option>
+	<option value='playlist'>Play playlist</option>
+	<option value='playAll'>Play All</option>
+	</select>
+	<!-- </div> -->
+	<button id='addschedule'>Add to Schedule</button>
+	<ul id='scheduleul' data-inset='true' data-role='listview' data-theme='d'>
+</ul><br/>
+	<a href='#home' data-role='button' data-theme='e'>Back To Main Menu</a>
+  </div>
+	<div data-role="panel" id="leftpanel5" data-position="left" data-display="overlay" data-theme="b" data-position-fixed="true">
+        <div class="ui-panel-inner"><h3>Current Playlist:</h3>
+		<ul data-role='listview' data-inset='true' class='playlistpanelul'data-theme='e'></ul>
+		<a href="#demo-links" data-role='button' data-rel="close">Close panel</a></div>
+	</div>
+	<div data-role="popup" id="popuptime" data-theme="b" class="ui-corner-all">
+		<form>
+			<div class='ui-content' style='text-align:center'>
+				<h3>Time</h3>
+				<input type='time' id='popuptimefield'>
+				<button type='button' id='timeconfirm'>Confirm</button>
+				<a type='button' id='timecancel' data-role='button' data-rel="back" data-theme='f'>Cancel</a>
+			</div>
+		</form>
+	 </div>
+	 <div data-history="false" data-role="popup" id="popupDialog" data-overlay-theme="b" data-theme="b" data-dismissible="false" style="max-width:400px;">
+		<div data-role="header" data-theme="b">
+			<h1 id='dialogHeader'>Remove Item?</h1>
+		</div>
+		<div role="main" id='dialogContent' class="ui-content" style='text-align:center'>
+		</div>
+	 </div>
+	 <div data-role="popup" id="popupspecifiplaylist" data-theme="b" class="ui-corner-all">
+		<form>
+			<div class='ui-content' style='text-align:center'>
+				<h3>Playlist</h3>
+	<ul data-role='listview' data-inset='true' data-theme='d' id='specificplaylistsul'>
+	<li data-theme='b' data-role="list-divider">Playlists</li>
+	</ul><br/>
+				<a type='button' id='timecancel' data-role='button' data-rel="back" data-theme='f'>Cancel</a>
+			</div>
+		</form>
+	 </div>
+</div> 
+<script>getCurrentTrack();</script>
+</body>
+</html>
