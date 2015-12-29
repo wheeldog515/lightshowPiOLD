@@ -19,15 +19,16 @@ import numpy as np
 piff_array = None
 window = list()
 
+
 def calculate_levels(data, chunk_size, sample_rate, frequency_limits, channels=2):
-    '''Calculate frequency response for each channel defined in frequency_limits
+    """Calculate frequency response for each channel defined in frequency_limits
 
     Initial FFT code inspired from the code posted here:
     http://www.raspberrypi.org/phpBB3/viewtopic.php?t=35838&p=454041
 
     Optimizations from work by Scott Driscoll:
     http://www.instructables.com/id/Raspberry-Pi-Spectrum-Analyzer-with-RGB-LED-Strip-/
-    '''
+    """
     global piff_array, window
 
     if piff_array is None:

@@ -162,42 +162,30 @@ if [ -z "$exists" ]; then
     echo "$KEEP_EN" >> /etc/sudoers
 fi
 
-# Install googlevoice and sms depedencies
-easy_install simplejson
-
-if [ $? -ne 0 ]; then
-    errchk "Installing simplejson"  $?
-fi
-
-# Install fixed version of googlevoice
-wget -O kkleidal-pygooglevoiceupdate.tar.gz https://kkleidal-pygooglevoiceupdate.googlecode.com/archive/450e372008a2d81aab4061fd387ee74e7797e030.tar.gz
-tar xvzf kkleidal-pygooglevoiceupdate.tar.gz
-cd kkleidal-pygooglevoiceupdate-450e372008a2
-python setup.py install
-
-
-if [ $? -ne 0 ]; then
-    errchk "Installing pygooglevoiceupdate" $?
-fi
-
-# install beautiful soup
-pip install Beautifulsoup
-
-if [ $? -ne 0 ]; then
-    errchk "Installing Beautifulsoup" $?
-fi
-
 #install web.py
 sudo easy_install web.py
+if [ $? -ne 0 ]; then
+    errchk "Installing web.py" $?
+fi  
 
 #install pip
 sudo apt-get install python-pip
+if [ $? -ne 0 ]; then
+    errchk "Installing python-pip" $?
+fi  
 
 #install pyephem
 sudo pip install pyephem
+if [ $? -ne 0 ]; then
+    errchk "Installing pyephem" $?
+fi  
 
 #install scheduler
 sudo pip install apscheduler
+
+if [ $? -ne 0 ]; then
+    errchk "Installing apscheduler" $?
+fi  
 
 echo "#!/bin/bash" > $INSTALL_DIR/cron.sh
 echo "export $ENV_VARIABLE" >> $INSTALL_DIR/cron.sh

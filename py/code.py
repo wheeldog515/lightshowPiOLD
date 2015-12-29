@@ -10,31 +10,33 @@ import scheduler_class as scheduler
 
 
 template_dir = os.path.abspath(os.path.dirname(__file__)) + "/templates"
-slc = lights.slc()
-sch = scheduler.scheduler(slc)
+slc = lights.SynchronizedLights()
+sch = scheduler.Scheduler(slc)
 env = os.environ['SYNCHRONIZED_LIGHTS_HOME']
 
-urls = ('/', 'index',
-        '/index.html', 'index',
+urls = ('/', 'Index',
+        '/index.html', 'Index',
         '/favicon.ico', 'favicon',
-        '/app.manifest', 'hello',
-        '/ajax', 'ajax',
-        '/getvars', 'getVars',
-        '/upload', 'upload',
-        '/scheduler', 'sched',
-        '/music', 'music',
-        '/(js|css|img)/(.*)', 'static')
+        '/app.manifest', 'Hello',
+        '/ajax', 'Ajax',
+        '/getvars', 'GetVars',
+        '/upload', 'Upload',
+        '/scheduler', 'Sched',
+        '/music', 'Music',
+        '/(js|css|img)/(.*)', 'Static')
 
 render = web.template.render(template_dir, cache=True, globals={'glob': glob, 'os': os, 'sch': sch})
 
 
-class index:
-    def GET(self):
+class Index(object):
+    @staticmethod
+    def GET():
         return render.index()
 
 
-class hello:
-    def GET(self):
+class Hello(object):
+    @staticmethod
+    def GET():
         web.header('Content-Type', 'text/cache-manifest')
         rmod = "r"
 
@@ -44,14 +46,15 @@ class hello:
             stream = f.read()
 
             return stream
-        except:
+        except IOError:
             f.close()
 
             return '404 Not Found'
 
 
-class static:
-    def GET(self, media, fn):
+class Static(object):
+    @staticmethod
+    def GET(media, fn):
         rmod = "r"
 
         if fn.endswith(".png"):
@@ -63,31 +66,35 @@ class static:
             stream = f.read()
 
             return stream
-        except:
+        except IOError:
             f.close()
 
             return '404 Not Found'
 
 
-class favicon:
-    def GET(self):
+class Favicon(object):
+    @staticmethod
+    def GET():
         f = open(os.environ['SYNCHRONIZED_LIGHTS_HOME'] + "/py/static/favicon.ico", 'rb')
 
         return f.read()
 
 
-class music:
-    def POST(self):
+class Music(object):
+    @staticmethod
+    def POST():
         web.header('Content-Type', 'application/json')
 
         return '{"sr":' + str(slc.sr) + ',"nc":' + str(slc.nc) + ',"fc":' + str(slc.fc) + '}'
 
-    def GET(self):
+    @staticmethod
+    def GET():
         return slc.thedata
 
 
-class ajax:
-    def GET(self):
+class Ajax(object):
+    @staticmethod
+    def GET():
         var = web.input()
 
         if var.option == '0':
@@ -98,109 +105,110 @@ class ajax:
         elif var.option == '1':
             return slc.audioChunkNumber
 
-    def POST(self):
-        vars = web.input()
+    @staticmethod
+    def POST():
+        variables = web.input()
 
-        if vars.option == '0':
-            slc.playlist(vars.playlist)
+        if variables.option == '0':
+            slc.playlist(variables.playlist)
 
-        elif vars.option == '1':
-            slc.playSingle(vars.song)
+        elif variables.option == '1':
+            slc.play_single(variables.song)
 
-        elif vars.option == '3':
+        elif variables.option == '3':
             slc.lightson()
 
-        elif vars.option == '4':
+        elif variables.option == '4':
             slc.lightsoff()
 
-        elif vars.option == 'lightOn':
+        elif variables.option == 'lightOn':
             # turn on a light
-            slc.lighton(int(vars.port))
+            slc.lighton(int(variables.port))
 
-        elif vars.option == 'lightOff':
+        elif variables.option == 'lightOff':
             # turn off a light
-            slc.lightoff(int(vars.port))
+            slc.lightoff(int(variables.port))
 
-        elif vars.option == '5':
+        elif variables.option == '5':
             web.header('Content-Type', 'application/json')
 
-            return slc.getConfig()
+            return slc.get_config()
 
-        elif vars.option == '6':
-            slc.setConfig(vars.object)
+        elif variables.option == '6':
+            slc.set_config(variables.object)
 
-        elif vars.option == '7':
-            slc.playAll()
+        elif variables.option == '7':
+            slc.play_all()
 
-        elif vars.option == '8':
+        elif variables.option == '8':
             web.header('Content-Type', 'application/json')
             str1 = '{"songs":['
 
-            for file in glob.glob(env + "/music/*.mp3"):
-                str1 = str1 + '["' + os.path.basename(file) + '","' + file + '"],'
+            for mfile in glob.glob(env + "/music/*.mp3"):
+                str1 = str1 + '["' + os.path.basename(mfile) + '","' + mfile + '"],'
 
-            for file in glob.glob(env + "/music/*.wav"):
-                str1 = str1 + '["' + os.path.basename(file) + '","' + file + '"],'
+            for mfile in glob.glob(env + "/music/*.wav"):
+                str1 = str1 + '["' + os.path.basename(mfile) + '","' + mfile + '"],'
 
             str1 = str1[:-1]
-            str1 = str1 + ']}'
+            str1 += ']}'
 
             return str1
 
-        elif vars.option == '9':
+        elif variables.option == '9':
             web.header('Content-Type', 'application/json')
 
-            file = open(env + "/music/playlists/" + vars.name + ".playlist", "w")
-            file.write(vars.val)
-            file.close()
+            mfile = open(env + "/music/playlists/" + variables.name + ".playlist", "w")
+            mfile.write(variables.val)
+            mfile.close()
 
             str1 = '{"playlists":['
 
-            for file in glob.glob(env + "/music/playlists/*.playlist"):
-                str1 = str1 + '["' + os.path.basename(file) + '","' + file + '"],'
+            for mfile in glob.glob(env + "/music/playlists/*.playlist"):
+                str1 = str1 + '["' + os.path.basename(mfile) + '","' + mfile + '"],'
 
             str1 = str1[:-1]
-            str1 = str1 + ']}'
+            str1 += ']}'
 
             return str1
 
-        elif vars.option == '10':
+        elif variables.option == '10':
             web.header('Content-Type', 'application/json')
 
-            if hasattr(vars, 'playlist'):
-                os.remove(vars.playlist)
+            if hasattr(variables, 'playlist'):
+                os.remove(variables.playlist)
 
             str1 = '{"playlists":['
 
-            for file in glob.glob(env + "/music/playlists/*.playlist"):
-                str1 = str1 + '["' + os.path.basename(file) + '","' + file + '"],'
+            for mfile in glob.glob(env + "/music/playlists/*.playlist"):
+                str1 = str1 + '["' + os.path.basename(mfile) + '","' + mfile + '"],'
 
             str1 = str1[:-1]
-            str1 = str1 + ']}'
+            str1 += ']}'
 
             return str1
 
-        elif vars.option == '11':
+        elif variables.option == '11':
             slc.set_config_default()
 
-        elif vars.option == '12':
+        elif variables.option == '12':
             app.stop()
             os.system("sudo shutdown -h now")
 
-        elif vars.option == '13':
+        elif variables.option == '13':
             app.stop()
             os.system("sudo shutdown -r now")
 
-        elif vars.option == '14':
+        elif variables.option == '14':
             return slc.audioChunk
 
-        elif vars.option == '15':
+        elif variables.option == '15':
             web.header('Content-Type', 'application/json')
 
             return json.dumps(sch.configData['schedule'])
 
-        elif vars.option == '16':
-            if slc.AudioIn == True:
+        elif variables.option == '16':
+            if slc.AudioIn:
                 slc.AudioIn = False
 
             else:
@@ -208,8 +216,9 @@ class ajax:
                 slc.audio_in()
 
 
-class getVars:
-    def POST(self):
+class GetVars(object):
+    @staticmethod
+    def POST():
         web.header('Content-Type', 'application/json')
         str1 = ''
 
@@ -221,11 +230,12 @@ class getVars:
         return '{"currentsong":"' + slc.current_song_name + '","duration":"' + str(
             slc.duration) + '","currentpos":"' + str(
             slc.current_position) + '","playlist":[' + str1 + '],"playlistplaying":"' + \
-               slc.playlistplaying + '"}'
+            slc.playlistplaying + '"}'
 
 
-class upload:
-    def POST(self):
+class Upload(object):
+    @staticmethod
+    def POST():
         filedir = env + "/music/"  # change this to the directory you want to store the file in.
         i = web.webapi.rawinput()
         files = i.myfile
@@ -234,47 +244,54 @@ class upload:
             files = [files]
 
         for x in files:
-            filepath = x.filename.replace('\\',
-                                          '/')  # replaces the windows-style slashes with linux
-                                          # ones.
-            filename = filepath.split('/')[
-                -1]  # splits the and chooses the last part (the filename with extension)
-            fout = open(filedir + '/' + filename,
-                        'w')  # creates the file where the uploaded file should be stored
-            fout.write(x.file.read())  # writes the uploaded file to the newly created file.
-            fout.close()  # closes the file, upload complete.
+            # replaces the windows-style slashes with linux ones.
+            filepath = x.filename.replace('\\', '/')
+
+            # splits the and chooses the last part (the filename with extension)
+            filename = filepath.split('/')[-1]
+
+            # creates the file where the uploaded file should be stored
+            fout = open(filedir + '/' + filename, 'w')
+
+            # writes the uploaded file to the newly created file.
+            fout.write(x.file.read())
+
+            # closes the file, upload complete.
+            fout.close()
 
         web.header('Content-Type', 'application/json')
         str1 = '{"songs":['
 
-        for file in glob.glob(env + "/music/*.mp3"):
-            str1 = str1 + '["' + os.path.basename(file) + '","' + file + '"],'
+        for mfile in glob.glob(env + "/music/*.mp3"):
+            str1 = str1 + '["' + os.path.basename(mfile) + '","' + mfile + '"],'
 
-        for file in glob.glob(env + "/music/*.wav"):
-            str1 = str1 + '["' + os.path.basename(file) + '","' + file + '"],'
+        for mfile in glob.glob(env + "/music/*.wav"):
+            str1 = str1 + '["' + os.path.basename(mfile) + '","' + mfile + '"],'
 
         str1 = str1[:-1]
-        str1 = str1 + ']}'
+        str1 += ']}'
 
         return str1
 
 
-class sched:
-    def POST(self):
-        vars = web.input()
-        if vars.option == '0':
-            id = sch.addEvent(vars.type, vars.theif, vars.thethen, vars.arg)
+class Sched(object):
+    @staticmethod
+    def POST():
+        variables = web.input()
+        if variables.option == '0':
+            event_id = sch.add_event(variables.type, variables.theif, variables.thethen,
+                                     variables.arg)
 
-            return id
+            return event_id
 
-        elif vars.option == '1':
-            sch.configData['locationData']['lat'] = vars.lat
-            sch.configData['locationData']['lng'] = vars.lng
-            sch.saveConfig()
-            sch.loadConfig()
+        elif variables.option == '1':
+            sch.configData['locationData']['lat'] = variables.lat
+            sch.configData['locationData']['lng'] = variables.lng
+            sch.save_config()
+            sch.load_config()
 
-        elif vars.option == '2':
-            sch.removeEvent(vars.id)
+        elif variables.option == '2':
+            sch.remove_event(variables.id)
 
 
 class Application(web.application):
@@ -289,5 +306,5 @@ if __name__ == "__main__":
     app = Application(urls, globals())
     app.run(port=slc.port)
 
-    sch.stopScheduler()
+    sch.stop_scheduler()
     slc.lightsoff()    

@@ -24,20 +24,13 @@ and off as the frequency response in the corresponding channel crosses a thresho
 
 FFT calculation can be CPU intensive and in some cases can adversely affect playback of songs
 (especially if attempting to decode the song as well, as is the case for an mp3).  For this reason,
-the FFT cacluations are cached after the first time a new song is played.  The values are cached
+the FFT calculations are cached after the first time a new song is played.  The values are cached
 in a gzip'd text file in the same location as the song itself.  Subsequent requests to play the
 same song will use the cached information and not recompute the FFT, thus reducing CPU utilization
 dramatically and allowing for clear music playback of all audio file types.
 
 Recent optimizations have improved this dramatically and most users are no longer reporting
 adverse playback of songs even on the first playback.
-
-Sample usage:
-To play an entire list -
-sudo python synchronized_lights.py --playlist=/home/pi/music/.playlist
-
-To play a specific song -
-sudo python synchronized_lights.py --file=/home/pi/music/jingle_bells.mp3
 
 Third party dependencies:
 
@@ -67,74 +60,88 @@ import numpy as np
 from preshow import Preshow
 
 
-class slc:
+class SynchronizedLights:
 
     def __init__(self):
-        self.loadConfig()
+        self.CUSTOM_CHANNEL_MAPPING = 0
+        self.CUSTOM_CHANNEL_FREQUENCIES = 0
+        self.currentlyplaying = None
+        self.playlistplaying = None
+        self.musicfile = None
+        self.sr = 0
+        self.nc = 0
+        self.fc = 0
+        self.duration = 0
+        self.current_position = 0
+        self.fm_process = None
+        self.CONFIG = None
+        self.MODE = None
+        self.MIN_FREQUENCY = None
+        self.MAX_FREQUENCY = None
+        self.RANDOMIZE_PLAYLIST = None
+        self.frequency = None
+        self.usefm = False
+        self.play_stereo = True
+        self.music_pipe_r, self.music_pipe_w = os.pipe()
+        self.PLAYLIST_PATH = None
+
+        self.CHUNK_SIZE = 2048  # Use a multiple of 8 (move this to config)
+        self.fm_process = None
+        self.port = None
+
+        self.load_config()
         self.current_playlist = []
         self.current_song_name = 'none'
         self.audioChunk = 0
         self.AudioIn = False
-        self.setInits()
+        self.set_inits()
         hc.initialize()
-        if slc._usefm != 'false' and slc.fm_process == 0:
+        if not self.usefm and not self.fm_process:
             self.run_pifm()
 
-    # Configurations - TODO(todd): Move more of this into configuration manager
-    @staticmethod
-    def loadConfig():
-        slc._CONFIG = cm.CONFIG
-        slc._MODE = cm.lightshow()['mode']
-        slc._MIN_FREQUENCY = slc._CONFIG.getfloat('audio_processing', 'min_frequency')
-        slc._MAX_FREQUENCY = slc._CONFIG.getfloat('audio_processing', 'max_frequency')
-        slc._RANDOMIZE_PLAYLIST = slc._CONFIG.getboolean('lightshow', 'randomize_playlist')
+    # Configurations - Move more of this into configuration manager
+    def load_config(self):
+        self.CONFIG = cm.CONFIG
+        self.MODE = cm.lightshow()['mode']
+        self.MIN_FREQUENCY = self.CONFIG.getfloat('audio_processing', 'min_frequency')
+        self.MAX_FREQUENCY = self.CONFIG.getfloat('audio_processing', 'max_frequency')
+        self.RANDOMIZE_PLAYLIST = self.CONFIG.getboolean('lightshow', 'randomize_playlist')
 
-        try:
-            slc._CUSTOM_CHANNEL_MAPPING = [int(channel) for channel in
-                                           slc_CONFIG.get('audio_processing',
-                                                          'custom_channel_mapping').split(',')]
-        except:
-            slc._CUSTOM_CHANNEL_MAPPING = 0
+        if self.CONFIG.get('audio_processing', 'custom_channel_mapping') != "-1":
+            self.CUSTOM_CHANNEL_MAPPING = [int(channel) for channel in
+                                           self.CONFIG.get('audio_processing',
+                                                           'custom_channel_mapping').split(',')]
 
-        try:
-            slc._CUSTOM_CHANNEL_FREQUENCIES = [int(channel) for channel in
-                                               slc._CONFIG.get('audio_processing',
+        if self.CONFIG.get('audio_processing', 'custom_channel_frequencies') != "-1":
+            self.CUSTOM_CHANNEL_FREQUENCIES = [int(channel) for channel in
+                                               self.CONFIG.get('audio_processing',
                                                                'custom_channel_frequencies').split(
                                                    ',')]
-        except:
-            slc._CUSTOM_CHANNEL_FREQUENCIES = 0
 
-        try:
-            slc._PLAYLIST_PATH = cm.lightshow()['playlist_path'].replace(
-                '$SYNCHRONIZED_LIGHTS_HOME', cm.HOME_DIR)
-        except:
-            slc._PLAYLIST_PATH = "/home/pi/music/.playlist"
+        self.PLAYLIST_PATH = cm.lightshow()['playlist_path'].replace(
+            '$SYNCHRONIZED_LIGHTS_HOME', cm.HOME_DIR)
 
-        try:
-            slc.frequency = slc._CONFIG.get('audio_processing', 'frequency')
-            slc._usefm = slc._CONFIG.get('audio_processing', 'fm')
-            slc.play_stereo = True
-            slc.music_pipe_r, slc.music_pipe_w = os.pipe()
-        except:
-            slc._usefm = 'false'
+        self.frequency = self.CONFIG.get('audio_processing', 'frequency')
+        self.usefm = self.CONFIG.getboolean('audio_processing', 'fm')
+        self.play_stereo = True
+        self.music_pipe_r, self.music_pipe_w = os.pipe()
 
-        slc.CHUNK_SIZE = 2048  # Use a multiple of 8 (move this to config)
-        slc.fm_process = 0
-        slc.port = slc._CONFIG.getint('webui', 'webui_port')
+        self.CHUNK_SIZE = 2048  # Use a multiple of 8 (move this to config)
+        self.fm_process = None
+        self.port = self.CONFIG.getint('webui', 'webui_port')
 
-    @staticmethod
-    def setConfig(val):
+    def set_config(self, val):
         # decode the json from the web form into a python dict
         obj = json.loads(val)
 
         # iterate over that structure entering each option into the config
         for section in obj:
             for keys in obj[section]:
-                slc._CONFIG.set(section, keys, obj[section][keys])
+                self.CONFIG.set(section, keys, obj[section][keys])
 
         # write changes to the config file to ~/.lights.cfg
         with open(os.path.expanduser('~/.lights.cfg'), 'wb') as configfile:
-            slc._CONFIG.write(configfile)
+            self.CONFIG.write(configfile)
             print configfile
 
     @staticmethod
@@ -148,35 +155,35 @@ class slc:
     def lightson(self):
         hc.turn_on_lights()
         self.current_song_name = 'none / lights on'
-        self.setInits()
+        self.set_inits()
 
     def lighton(self, i):
         hc.turn_on_light(i)
         self.current_song_name = 'none / light(s) on'
-        self.setInits()
+        self.set_inits()
 
     def cleanup(self):
         hc.clean_up()
         self.current_song_name = 'none / lights off'
-        self.setInits()
+        self.set_inits()
 
     def lightsoff(self):
         hc.turn_off_lights()
         self.current_song_name = 'none / lights off'
-        self.setInits()
+        self.set_inits()
 
     def lightoff(self, i):
         hc.turn_off_light(i)
         self.current_song_name = 'none / light(s) off'
-        self.setInits()
+        self.set_inits()
 
-    def getConfig(self):
+    def get_config(self):
         results = '{'
-        sections = self.getSections()
+        sections = self.get_sections()
 
         for i in sections:
             results = results + '"' + i + '":{'
-            options = self.getOptions(i)
+            options = self.get_options(i)
 
             for j in options:
                 if j == 'preshow_configuration':
@@ -190,26 +197,22 @@ class slc:
 
         return results
 
-    @staticmethod
-    def getSections():
-        return slc._CONFIG.sections()
+    def get_sections(self):
+        return self.CONFIG.sections()
 
-    @staticmethod
-    def getItems(section):
-        return json.dumps(slc._CONFIG.items(section))
+    def get_items(self, section):
+        return json.dumps(self.CONFIG.items(section))
 
-    @staticmethod
-    def get(section, option):
-        return slc._CONFIG.get(section, option)
+    def get(self, section, option):
+        return self.CONFIG.get(section, option)
 
-    @staticmethod
-    def getOptions(section):
-        return slc._CONFIG.options(section)
+    def get_options(self, section):
+        return self.CONFIG.options(section)
 
     @staticmethod
     def calculate_channel_frequency(min_frequency, max_frequency, custom_channel_mapping,
                                     custom_channel_frequencies):
-        '''Calculate frequency values for each channel, taking into account custom settings.'''
+        """Calculate frequency values for each channel, taking into account custom settings."""
 
         # How many channels do we need to calculate the frequency for
         if custom_channel_mapping != 0 and len(custom_channel_mapping) == hc.GPIOLEN:
@@ -227,8 +230,8 @@ class slc:
         frequency_store = []
 
         frequency_limits.append(min_frequency)
-        if custom_channel_frequencies != 0 and (
-            len(custom_channel_frequencies) >= channel_length + 1):
+        if custom_channel_frequencies != 0 and \
+                (len(custom_channel_frequencies) >= channel_length + 1):
             logging.debug("Custom channel frequencies are being used")
             frequency_limits = custom_channel_frequencies
         else:
@@ -262,12 +265,12 @@ class slc:
 
     @staticmethod
     def update_lights(matrix, mean, std):
-        '''Update the state of all the lights based upon the current frequency response matrix'''
+        """Update the state of all the lights based upon the current frequency response matrix"""
         for i in range(0, hc.GPIOLEN):
             # Calculate output pwm, where off is at some portion of the std below
             # the mean and full on is at some portion of the std above the mean.
             brightness = matrix[i] - mean[i] + 0.5 * std[i]
-            brightness = brightness / (1.25 * std[i])
+            brightness /= (1.25 * std[i])
 
             if brightness > 1.0:
                 brightness = 1.0
@@ -277,7 +280,7 @@ class slc:
 
             if not hc.is_pin_pwm(i):
                 # If pin is on / off mode we'll turn on at 1/2 brightness
-                if (brightness > 0.5):
+                if brightness > 0.5:
                     hc.turn_on_light(i, True)
                 else:
                     hc.turn_off_light(i, True)
@@ -302,10 +305,10 @@ class slc:
         # print "Running in audio-in mode, use Ctrl+C to stop"
         #        try:
         # hc.initialize()
-        frequency_limits = calculate_channel_frequency(_MIN_FREQUENCY,
-                                                       _MAX_FREQUENCY,
-                                                       _CUSTOM_CHANNEL_MAPPING,
-                                                       _CUSTOM_CHANNEL_FREQUENCIES)
+        frequency_limits = calculate_channel_frequency(MIN_FREQUENCY,
+                                                       MAX_FREQUENCY,
+                                                       CUSTOM_CHANNEL_MAPPING,
+                                                       CUSTOM_CHANNEL_FREQUENCIES)
 
         # Start with these as our initial guesses - will calculate a rolling mean / std
         # as we get input data.
@@ -330,7 +333,7 @@ class slc:
                         # Bad data --- skip it
                         continue
                 except ValueError as e:
-                    # TODO(todd): This is most likely occuring due to extra time in calculating
+                    # This is most likely occuring due to extra time in calculating
                     # mean/std every 250 samples which causes more to be read than expected the
                     # next time around.  Would be good to update mean/std in separate thread to
                     # avoid this --- but for now, skip it when we run into this error is good 
@@ -342,7 +345,7 @@ class slc:
 
                 # Keep track of the last N samples to compute a running std / mean
                 #
-                # TODO(todd): Look into using this algorithm to compute this on a per sample basis:
+                # Look into using this algorithm to compute this on a per sample basis:
                 # http://www.johndcook.com/blog/standard_deviation/                
                 if num_samples >= 250:
                     no_connection_ct = 0
@@ -369,21 +372,21 @@ class slc:
 
         self.lightsoff()
 
-    def playAll(self):
+    def play_all(self):
         types = ('/home/pi/lightshowpi/music/*.wav',
                  '/home/pi/lightshowpi/music/*.mp3')  # the tuple of file types
 
         self.current_playlist = []
 
         for files in types:
-            for file in glob.glob(files):
-                self.current_playlist.append([os.path.splitext(os.path.basename(file))[0], file])
+            for mfile in glob.glob(files):
+                self.current_playlist.append([os.path.splitext(os.path.basename(mfile))[0], mfile])
 
         for song in self.current_playlist:
             # Get random song
-            if slc._RANDOMIZE_PLAYLIST:
+            if self.RANDOMIZE_PLAYLIST:
                 self.currentlyplaying = \
-                self.current_playlist[random.randint(0, len(self.current_playlist) - 1)][1]
+                    self.current_playlist[random.randint(0, len(self.current_playlist) - 1)][1]
             # Play next song in the lineup
             else:
                 self.currentlyplaying = song[1]
@@ -411,9 +414,9 @@ class slc:
 
         for song in self.current_playlist:
             # Get random song
-            if slc._RANDOMIZE_PLAYLIST:
+            if self.RANDOMIZE_PLAYLIST:
                 self.currentlyplaying = \
-                self.current_playlist[random.randint(0, len(self.current_playlist) - 1)][1]
+                    self.current_playlist[random.randint(0, len(self.current_playlist) - 1)][1]
             # Play next song in the lineup
             else:
                 self.currentlyplaying = song[1]
@@ -423,7 +426,7 @@ class slc:
 
         self.current_playlist = []
 
-    def playSingle(self, song):
+    def play_single(self, song):
         self.current_playlist = []
         self.current_playlist.append([os.path.splitext(os.path.basename(song))[0], song])
         self.currentlyplaying = self.current_playlist[0][1]
@@ -431,7 +434,7 @@ class slc:
         self.play(self.currentlyplaying)
         self.current_playlist = []
 
-    def play(self, file):
+    def play(self, mfile):
         self.current_song_name = 'none'
         self.current_position = 0
         self.duration = 0
@@ -442,14 +445,14 @@ class slc:
                             level=logging.DEBUG)
 
         # Make sure file was specified
-        if file == None:
+        if mfile is None:
             print "File must be specified"
 
         # Execute preshow
         Preshow().execute()
 
         # Get filename to play and store the current song playing in state cfg
-        song_filename = file
+        song_filename = mfile
         self.current_song_name = os.path.splitext(os.path.basename(song_filename))[0]
         song_filename = song_filename.replace("$SYNCHRONIZED_LIGHTS_HOME", cm.HOME_DIR)
 
@@ -470,7 +473,7 @@ class slc:
         output.setchannels(num_channels)
         output.setrate(sample_rate)
         output.setformat(aa.PCM_FORMAT_S16_LE)
-        output.setperiodsize(slc.CHUNK_SIZE)
+        output.setperiodsize(self.CHUNK_SIZE)
 
         logging.info(
             "Playing: " + song_filename + " (" + str(self.musicfile.getnframes() / sample_rate)
@@ -481,7 +484,7 @@ class slc:
         cache = []
         cache_found = False
         cache_filename = os.path.dirname(song_filename) + "/." + os.path.basename(song_filename) \
-                         + ".sync.gz"
+            + ".sync.gz"
         # The values 12 and 1.5 are good estimates for first time playing back (i.e. before we have
         # the actual mean and standard deviations calculated for each channel).
         mean = [12.0 for _ in range(hc.GPIOLEN)]
@@ -493,7 +496,7 @@ class slc:
                     cache.append(
                         [0.0 if np.isinf(float(item)) else float(item) for item in row])
                 cache_found = True
-                # TODO(todd): Optimize this and / or cache it to avoid delay here
+                # Optimize this and / or cache it to avoid delay here
                 cache_matrix = np.array(cache)
                 for i in range(0, hc.GPIOLEN):
                     std[i] = np.std([item for item in cache_matrix[:, i] if item > 0])
@@ -505,15 +508,15 @@ class slc:
 
         # Process audio song_filename
         row = 0
-        data = self.musicfile.readframes(slc.CHUNK_SIZE)
-        frequency_limits = self.calculate_channel_frequency(slc._MIN_FREQUENCY,
-                                                            slc._MAX_FREQUENCY,
-                                                            slc._CUSTOM_CHANNEL_MAPPING,
-                                                            slc._CUSTOM_CHANNEL_FREQUENCIES)
+        data = self.musicfile.readframes(self.CHUNK_SIZE)
+        frequency_limits = self.calculate_channel_frequency(self.MIN_FREQUENCY,
+                                                            self.MAX_FREQUENCY,
+                                                            self.CUSTOM_CHANNEL_MAPPING,
+                                                            self.CUSTOM_CHANNEL_FREQUENCIES)
 
         while data != '':
-            if slc._usefm == 'true':
-                os.write(slc.music_pipe_w, data)
+            if self.usefm:
+                os.write(self.music_pipe_w, data)
             else:
                 output.write(data)
 
@@ -529,34 +532,40 @@ class slc:
                     logging.warning("Ran out of cached FFT values, will update the cache.")
                     cache_found = False
 
-            if matrix == None:
+            if matrix is None:
                 # No cache - Compute FFT in this chunk, and cache results
-                matrix = fft.calculate_levels(data, slc.CHUNK_SIZE, sample_rate, frequency_limits)
+                matrix = fft.calculate_levels(data, self.CHUNK_SIZE, sample_rate, frequency_limits)
                 cache.append(matrix)
 
             self.update_lights(matrix, mean, std)
 
             # Read next chunk of data from music song_filename
-            data = self.musicfile.readframes(slc.CHUNK_SIZE)
-            row = row + 1
+            data = self.musicfile.readframes(self.CHUNK_SIZE)
+            row += 1
 
         if not cache_found:
             with gzip.open(cache_filename, 'wb') as playlist_fp:
                 writer = csv.writer(playlist_fp, delimiter=',')
                 writer.writerows(cache)
-                logging.info("Cached sync data written to '.%s' [%s rows]" %(cache_filename,
-                                                                             str(len(cache))))
+                logging.info("Cached sync data written to '.%s' [%s rows]" % (cache_filename,
+                                                                              str(len(cache))))
 
         self.lightsoff()
 
-    def setInits(self):
+    def set_inits(self):
         self.musicfile = 0
         self.duration = 0
         self.current_position = 0
         self.playlistplaying = ''
 
-    def run_pifm(self, use_audio_in=False):
+    def run_pifm(self):
         with open(os.devnull, "w") as dev_null:
-            slc.fm_process = subprocess.Popen(
-                ["sudo", cm.HOME_DIR + "/bin/pifm", "-", str(slc.frequency), "44100",
-                 "stereo" if slc.play_stereo else "mono"], stdin=slc.music_pipe_r, stdout=dev_null)
+            self.fm_process = subprocess.Popen(
+                ["sudo",
+                 cm.HOME_DIR + "/bin/pifm",
+                 "-",
+                 str(self.frequency),
+                 "44100",
+                 "stereo" if self.play_stereo else "mono"],
+                stdin=self.music_pipe_r,
+                stdout=dev_null)
