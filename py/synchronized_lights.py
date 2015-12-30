@@ -96,7 +96,7 @@ class SynchronizedLights:
         self.AudioIn = False
         self.set_inits()
         hc.initialize()
-        if not self.usefm and not self.fm_process:
+        if self.usefm and not self.fm_process:
             self.run_pifm()
 
     # Configurations - Move more of this into configuration manager
