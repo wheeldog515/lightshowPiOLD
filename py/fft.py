@@ -15,6 +15,7 @@ numpy: for FFT calculation - http://www.numpy.org/
 
 import hardware_controller as hc
 import numpy as np
+from numpy import array
 
 piff_array = None
 window = list()
@@ -29,6 +30,9 @@ def calculate_levels(data, chunk_size, sample_rate, frequency_limits, channels=2
     Optimizations from work by Scott Driscoll:
     http://www.instructables.com/id/Raspberry-Pi-Spectrum-Analyzer-with-RGB-LED-Strip-/
     """
+    peakMax = 16384.0
+    peaks = array([0, 0])
+
     global piff_array, window
 
     if piff_array is None:
@@ -42,10 +46,16 @@ def calculate_levels(data, chunk_size, sample_rate, frequency_limits, channels=2
     # create a numpy array, taking just the left channel if stereo
     data_stereo = np.frombuffer(data, dtype=np.int16)
     if channels == 2:
-        data = np.empty(len(data) / (2 * channels))  # data has 2 bytes per channel
-        data[:] = data_stereo[::2]  # pull out the even values, just using left channel
+        data = array(data_stereo[::2])  # pull out the even values, just using left channel
+        right = array(data_stereo[1::2])
+        peaks[0] = abs(max(data)-1)/4 + abs(min(data)+1)/4
+        peaks[1] = abs(max(right)-1)/4 + abs(min(right)+1)/4
     elif channels == 1:
         data = data_stereo
+        peaks[0] = abs(max(data)-1)/4 +abs(min(data)+1)/4
+        peaks[1] = peaks[0]
+
+    peaks = peaks / peakMax 
 
     # if you take an FFT of a chunk of audio, the edges will look like
     # super high frequency cutoffs. Applying a window tapers the edges
@@ -74,9 +84,9 @@ def calculate_levels(data, chunk_size, sample_rate, frequency_limits, channels=2
     # take the log10 of the resulting sum to approximate how human ears
     # perceive sound levels
     if all(cache_matrix == 0.0):
-        return cache_matrix
+        return cache_matrix, peaks
 
     with np.errstate(divide='ignore'):
         cache_matrix = np.where(cache_matrix > 0.0, np.log10(cache_matrix), 0)
 
-    return cache_matrix
+    return cache_matrix, peaks

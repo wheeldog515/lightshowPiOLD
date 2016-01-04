@@ -63,6 +63,7 @@ from preshow import Preshow
 class SynchronizedLights:
 
     def __init__(self):
+        print 'init started'
         self.CUSTOM_CHANNEL_MAPPING = 0
         self.CUSTOM_CHANNEL_FREQUENCIES = 0
         self.currentlyplaying = None
@@ -98,9 +99,11 @@ class SynchronizedLights:
         hc.initialize()
         if self.usefm and not self.fm_process:
             self.run_pifm()
+        print 'init done'
 
     # Configurations - Move more of this into configuration manager
     def load_config(self):
+        print 'load config started'
         self.CONFIG = cm.CONFIG
         self.MODE = cm.lightshow()['mode']
         self.MIN_FREQUENCY = self.CONFIG.getfloat('audio_processing', 'min_frequency')
@@ -129,6 +132,7 @@ class SynchronizedLights:
         self.CHUNK_SIZE = 2048  # Use a multiple of 8 (move this to config)
         self.fm_process = None
         self.port = self.CONFIG.getint('webui', 'webui_port')
+        print 'load config done'
 
     def set_config(self, val):
         # decode the json from the web form into a python dict
@@ -213,14 +217,8 @@ class SynchronizedLights:
     def calculate_channel_frequency(min_frequency, max_frequency, custom_channel_mapping,
                                     custom_channel_frequencies):
         """Calculate frequency values for each channel, taking into account custom settings."""
-
-        # How many channels do we need to calculate the frequency for
-        if custom_channel_mapping != 0 and len(custom_channel_mapping) == hc.GPIOLEN:
-            logging.debug("Custom Channel Mapping is being used: %s", str(custom_channel_mapping))
-            channel_length = max(custom_channel_mapping)
-        else:
-            logging.debug("Normal Channel Mapping is being used.")
-            channel_length = hc.GPIOLEN
+        logging.debug("Normal Channel Mapping is being used.")
+        channel_length = hc.GPIOLEN
 
         logging.debug("Calculating frequencies for %d channels.", channel_length)
         octaves = (np.log(max_frequency / min_frequency)) / np.log(2)
@@ -230,62 +228,33 @@ class SynchronizedLights:
         frequency_store = []
 
         frequency_limits.append(min_frequency)
-        if custom_channel_frequencies != 0 and \
-                (len(custom_channel_frequencies) >= channel_length + 1):
-            logging.debug("Custom channel frequencies are being used")
-            frequency_limits = custom_channel_frequencies
-        else:
-            logging.debug("Custom channel frequencies are not being used")
-            for i in range(1, hc.GPIOLEN + 1):
-                frequency_limits.append(frequency_limits[-1]
-                                        * 10 ** (3 / (10 * (1 / octaves_per_channel))))
+        logging.debug("Custom channel frequencies are not being used")
+        for i in range(1, hc.GPIOLEN + 1):
+            frequency_limits.append(frequency_limits[-1] * 10 ** (3 / (10 * (1 / octaves_per_channel))))
+        
         for i in range(0, channel_length):
             frequency_store.append((frequency_limits[i], frequency_limits[i + 1]))
-            logging.debug("channel %d is %6.2f to %6.2f ", i, frequency_limits[i],
-                          frequency_limits[i + 1])
+            logging.debug("channel %d is %6.2f to %6.2f ", i, frequency_limits[i], frequency_limits[i + 1])
 
-        # we have the frequencies now lets map them if custom mapping is defined
-        if custom_channel_mapping != 0 and len(custom_channel_mapping) == hc.GPIOLEN:
-            frequency_map = []
-
-            for i in range(0, hc.GPIOLEN):
-                mapped_channel = custom_channel_mapping[i] - 1
-                mapped_frequency_set = frequency_store[mapped_channel]
-                mapped_frequency_set_low = mapped_frequency_set[0]
-                mapped_frequency_set_high = mapped_frequency_set[1]
-                logging.debug("mapped channel: " + str(mapped_channel) + " will hold LOW: "
-                              + str(mapped_frequency_set_low) + " HIGH: "
-                              + str(mapped_frequency_set_high))
-
-                frequency_map.append(mapped_frequency_set)
-
-            return frequency_map
-        else:
-            return frequency_store
+        return frequency_store
 
     @staticmethod
-    def update_lights(matrix, mean, std):
+    def update_lights(matrix, mean, std, peaks):
         """Update the state of all the lights based upon the current frequency response matrix"""
-        for i in range(0, hc.GPIOLEN):
-            # Calculate output pwm, where off is at some portion of the std below
-            # the mean and full on is at some portion of the std above the mean.
-            brightness = matrix[i] - mean[i] + 0.5 * std[i]
-            brightness /= (1.25 * std[i])
+        brightness = matrix - mean + (std * 0.5)
+        brightness = brightness / (std * 1.25)
 
-            if brightness > 1.0:
-                brightness = 1.0
-
-            if brightness < 0:
-                brightness = 0
-
-            if not hc.is_pin_pwm(i):
-                # If pin is on / off mode we'll turn on at 1/2 brightness
-                if brightness > 0.5:
-                    hc.turn_on_light(i, True)
-                else:
-                    hc.turn_off_light(i, True)
-            else:
-                hc.turn_on_light(i, True, brightness)
+        # ensure that the brightness levels are in the correct range
+        brightness = np.clip(brightness, 0.0, 1.0)
+        brightness = np.round(brightness, decimals=3)
+       
+        bass = False
+        if brightness[0] > 0.5:
+            bass = True
+        if brightness[1] > 0.8:
+            bass = True
+ 
+        hc.set_levels(brightness, peaks, bass)
 
     def audio_in(self):
         """Control the lightshow from audio coming in from a USB audio card"""
@@ -324,7 +293,7 @@ class SynchronizedLights:
 
             if l:
                 try:
-                    matrix = fft.calculate_levels(data,
+                    matrix, peaks = fft.calculate_levels(data,
                                                   CHUNK_SIZE,
                                                   sample_rate,
                                                   frequency_limits,
@@ -341,7 +310,7 @@ class SynchronizedLights:
                     logging.debug("skipping update: " + str(e))
                     continue
 
-                update_lights(matrix, mean, std)
+                update_lights(matrix, mean, std, peaks)
 
                 # Keep track of the last N samples to compute a running std / mean
                 #
@@ -449,7 +418,7 @@ class SynchronizedLights:
             print "File must be specified"
 
         # Execute preshow
-        Preshow().execute()
+#        Preshow().execute()
 
         # Get filename to play and store the current song playing in state cfg
         song_filename = mfile
@@ -487,8 +456,8 @@ class SynchronizedLights:
             + ".sync.gz"
         # The values 12 and 1.5 are good estimates for first time playing back (i.e. before we have
         # the actual mean and standard deviations calculated for each channel).
-        mean = [12.0 for _ in range(hc.GPIOLEN)]
-        std = [1.5 for _ in range(hc.GPIOLEN)]
+        mean = np.array([12.0 for _ in range(hc.GPIOLEN)])
+        std = np.array([1.5 for _ in range(hc.GPIOLEN)])
         try:
             with gzip.open(cache_filename, 'rb') as playlist_fp:
                 cachefile = csv.reader(playlist_fp, delimiter=',')
@@ -534,10 +503,10 @@ class SynchronizedLights:
 
             if matrix is None:
                 # No cache - Compute FFT in this chunk, and cache results
-                matrix = fft.calculate_levels(data, self.CHUNK_SIZE, sample_rate, frequency_limits)
+                matrix, peaks = fft.calculate_levels(data, self.CHUNK_SIZE, sample_rate, frequency_limits)
                 cache.append(matrix)
 
-            self.update_lights(matrix, mean, std)
+            self.update_lights(matrix, mean, std, peaks)
 
             # Read next chunk of data from music song_filename
             data = self.musicfile.readframes(self.CHUNK_SIZE)
