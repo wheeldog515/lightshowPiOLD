@@ -96,6 +96,9 @@ class SynchronizedLights:
         self.audioChunk = 0
         self.AudioIn = False
         self.set_inits()
+
+        self.lights_active = True
+
         hc.initialize()
         if self.usefm and not self.fm_process:
             self.run_pifm()
@@ -238,8 +241,7 @@ class SynchronizedLights:
 
         return frequency_store
 
-    @staticmethod
-    def update_lights(matrix, mean, std, peaks):
+    def update_lights(self, matrix, mean, std, peaks):
         """Update the state of all the lights based upon the current frequency response matrix"""
         brightness = matrix - mean + (std * 0.5)
         brightness = brightness / (std * 1.25)
@@ -253,8 +255,9 @@ class SynchronizedLights:
             bass = True
         if brightness[1] > 0.8:
             bass = True
- 
-        hc.set_levels(brightness, peaks, bass)
+
+        if self.lights_active:
+            hc.set_levels(brightness, peaks, bass)
 
     def audio_in(self):
         """Control the lightshow from audio coming in from a USB audio card"""
@@ -310,7 +313,7 @@ class SynchronizedLights:
                     logging.debug("skipping update: " + str(e))
                     continue
 
-                update_lights(matrix, mean, std, peaks)
+                self.update_lights(matrix, mean, std, peaks)
 
                 # Keep track of the last N samples to compute a running std / mean
                 #

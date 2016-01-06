@@ -215,6 +215,8 @@ class Ajax(object):
                 slc.AudioIn = True
                 slc.audio_in()
 
+        elif variables.option == '17':
+            slc.lights_active = not slc.lights_active
 
 class GetVars(object):
     @staticmethod

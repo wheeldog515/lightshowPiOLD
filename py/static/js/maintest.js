@@ -439,6 +439,16 @@ function progressHandlingFunction(e){
 		});	
 	});
 	
+	$('#LightMode').click(function(){
+		console.log('option 17');
+		$.ajax({
+			type: 'POST',
+			url: '/ajax',
+			data: 'option=17',
+			async: true
+		});	
+	});
+	
 	$('#dialogContent').on('click','#removeItem',function(){
 		$("#popupDialog").popup('close');
 		$.ajax({
