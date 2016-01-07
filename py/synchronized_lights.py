@@ -161,13 +161,9 @@ class SynchronizedLights:
 
     def lightson(self):
         hc.turn_on_lights()
-        self.current_song_name = 'none / lights on'
-        self.set_inits()
 
     def lighton(self, i):
         hc.turn_on_light(i)
-        self.current_song_name = 'none / light(s) on'
-        self.set_inits()
 
     def cleanup(self):
         hc.clean_up()
@@ -176,13 +172,9 @@ class SynchronizedLights:
 
     def lightsoff(self):
         hc.turn_off_lights()
-        self.current_song_name = 'none / lights off'
-        self.set_inits()
 
     def lightoff(self, i):
         hc.turn_off_light(i)
-        self.current_song_name = 'none / light(s) off'
-        self.set_inits()
 
     def get_config(self):
         results = '{'
@@ -497,7 +489,7 @@ class SynchronizedLights:
 
             # Control lights with cached timing values if they exist
             matrix = None
-            if cache_found:
+            if False: #if cache_found:
                 if row < len(cache):
                     matrix = cache[row]
                 else:
