@@ -56,6 +56,7 @@ import configuration_manager as cm
 import decoder
 import hardware_controller as hc
 import numpy as np
+import time
 
 from preshow import Preshow
 
@@ -98,6 +99,8 @@ class SynchronizedLights:
         self.set_inits()
 
         self.lights_active = True
+        self.paused = False
+        self.pause_changed = False
 
         hc.initialize()
         if self.usefm and not self.fm_process:
@@ -195,6 +198,10 @@ class SynchronizedLights:
         results = results[:-1] + '}'
 
         return results
+
+    def pause(self, enable):
+        self.paused = enable
+        self.pause_changed = True
 
     def get_sections(self):
         return self.CONFIG.sections()
@@ -478,35 +485,43 @@ class SynchronizedLights:
                                                             self.CUSTOM_CHANNEL_MAPPING,
                                                             self.CUSTOM_CHANNEL_FREQUENCIES)
 
+        if self.pause_changed:
+            self.pause_changed = False
+            output.pause(self.paused)
+            
         while data != '':
-            if self.usefm:
-                os.write(self.music_pipe_w, data)
-            else:
-                output.write(data)
-
-            self.audioChunk = data
-            self.current_position = self.musicfile.tell() / self.musicfile.getframerate()
-
-            # Control lights with cached timing values if they exist
-            matrix = None
-            if False: #if cache_found:
-                if row < len(cache):
-                    matrix = cache[row]
+            if not self.paused:
+                if self.usefm:
+                    os.write(self.music_pipe_w, data)
                 else:
-                    logging.warning("Ran out of cached FFT values, will update the cache.")
-                    cache_found = False
+                    output.write(data)
 
-            if matrix is None:
-                # No cache - Compute FFT in this chunk, and cache results
-                matrix, peaks = fft.calculate_levels(data, self.CHUNK_SIZE, sample_rate, frequency_limits)
-                cache.append(matrix)
+                self.audioChunk = data
+                self.current_position = self.musicfile.tell() / self.musicfile.getframerate()
 
-            self.update_lights(matrix, mean, std, peaks)
+                # Control lights with cached timing values if they exist
+                matrix = None
+                if False: #if cache_found:
+                    if row < len(cache):
+                        matrix = cache[row]
+                    else:
+                        logging.warning("Ran out of cached FFT values, will update the cache.")
+                        cache_found = False
 
-            # Read next chunk of data from music song_filename
-            data = self.musicfile.readframes(self.CHUNK_SIZE)
-            row += 1
+                if matrix is None:
+                    # No cache - Compute FFT in this chunk, and cache results
+                    matrix, peaks = fft.calculate_levels(data, self.CHUNK_SIZE, sample_rate, frequency_limits)
+                    cache.append(matrix)
 
+                self.update_lights(matrix, mean, std, peaks)
+
+                # Read next chunk of data from music song_filename
+                data = self.musicfile.readframes(self.CHUNK_SIZE)
+                row += 1
+
+            else:
+                time.sleep(0.1)
+                
         if not cache_found:
             with gzip.open(cache_filename, 'wb') as playlist_fp:
                 writer = csv.writer(playlist_fp, delimiter=',')
